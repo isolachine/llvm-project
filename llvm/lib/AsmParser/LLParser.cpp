@@ -3588,16 +3588,17 @@ bool LLParser::ParseValID(ValID &ID, PerFunctionState *PFS) {
             ExplicitTypeLoc,
             "explicit pointee type doesn't match operand's pointee type");
 
-      unsigned GEPWidth =
-          BaseType->isVectorTy() ? BaseType->getVectorNumElements() : 0;
+      unsigned GEPWidth = BaseType->isVectorTy()
+                              ? cast<VectorType>(BaseType)->getNumElements()
+                              : 0;
 
       ArrayRef<Constant *> Indices(Elts.begin() + 1, Elts.end());
       for (Constant *Val : Indices) {
         Type *ValTy = Val->getType();
         if (!ValTy->isIntOrIntVectorTy())
           return Error(ID.Loc, "getelementptr index must be an integer");
-        if (ValTy->isVectorTy()) {
-          unsigned ValNumEl = ValTy->getVectorNumElements();
+        if (auto *ValVTy = dyn_cast<VectorType>(ValTy)) {
+          unsigned ValNumEl = ValVTy->getNumElements();
           if (GEPWidth && (ValNumEl != GEPWidth))
             return Error(
                 ID.Loc,
@@ -3636,8 +3637,9 @@ bool LLParser::ParseValID(ValID &ID, PerFunctionState *PFS) {
         return Error(ID.Loc, "expected three operands to shufflevector");
       if (!ShuffleVectorInst::isValidOperands(Elts[0], Elts[1], Elts[2]))
         return Error(ID.Loc, "invalid operands to shufflevector");
-      ID.ConstantVal =
-                 ConstantExpr::getShuffleVector(Elts[0], Elts[1],Elts[2]);
+      SmallVector<int, 16> Mask;
+      ShuffleVectorInst::getShuffleMask(cast<Constant>(Elts[2]), Mask);
+      ID.ConstantVal = ConstantExpr::getShuffleVector(Elts[0], Elts[1], Mask);
     } else if (Opc == Instruction::ExtractElement) {
       if (Elts.size() != 2)
         return Error(ID.Loc, "expected two operands to extractelement");
@@ -4637,7 +4639,7 @@ bool LLParser::ParseDIFile(MDNode *&Result, bool IsDistinct) {
 ///                      splitDebugFilename: "abc.debug",
 ///                      emissionKind: FullDebug, enums: !1, retainedTypes: !2,
 ///                      globals: !4, imports: !5, macros: !6, dwoId: 0x0abcd,
-///                      sysroot: "/")
+///                      sysroot: "/", sdk: "MacOSX.sdk")
 bool LLParser::ParseDICompileUnit(MDNode *&Result, bool IsDistinct) {
   if (!IsDistinct)
     return Lex.Error("missing 'distinct', required for !DICompileUnit");
@@ -4661,7 +4663,8 @@ bool LLParser::ParseDICompileUnit(MDNode *&Result, bool IsDistinct) {
   OPTIONAL(debugInfoForProfiling, MDBoolField, = false);                       \
   OPTIONAL(nameTableKind, NameTableKindField, );                               \
   OPTIONAL(debugBaseAddress, MDBoolField, = false);                            \
-  OPTIONAL(sysroot, MDStringField, );
+  OPTIONAL(sysroot, MDStringField, );                                          \
+  OPTIONAL(sdk, MDStringField, );
   PARSE_MD_FIELDS();
 #undef VISIT_MD_FIELDS
 
@@ -4670,7 +4673,7 @@ bool LLParser::ParseDICompileUnit(MDNode *&Result, bool IsDistinct) {
       runtimeVersion.Val, splitDebugFilename.Val, emissionKind.Val, enums.Val,
       retainedTypes.Val, globals.Val, imports.Val, macros.Val, dwoId.Val,
       splitDebugInlining.Val, debugInfoForProfiling.Val, nameTableKind.Val,
-      debugBaseAddress.Val, sysroot.Val);
+      debugBaseAddress.Val, sysroot.Val, sdk.Val);
   return false;
 }
 
@@ -4826,18 +4829,20 @@ bool LLParser::ParseDIMacroFile(MDNode *&Result, bool IsDistinct) {
 
 /// ParseDIModule:
 ///   ::= !DIModule(scope: !0, name: "SomeModule", configMacros: "-DNDEBUG",
-///                 includePath: "/usr/include")
+///                 includePath: "/usr/include", apinotes: "module.apinotes")
 bool LLParser::ParseDIModule(MDNode *&Result, bool IsDistinct) {
 #define VISIT_MD_FIELDS(OPTIONAL, REQUIRED)                                    \
   REQUIRED(scope, MDField, );                                                  \
   REQUIRED(name, MDStringField, );                                             \
   OPTIONAL(configMacros, MDStringField, );                                     \
-  OPTIONAL(includePath, MDStringField, );
+  OPTIONAL(includePath, MDStringField, );                                      \
+  OPTIONAL(apinotes, MDStringField, );
   PARSE_MD_FIELDS();
 #undef VISIT_MD_FIELDS
 
-  Result = GET_OR_DISTINCT(DIModule, (Context, scope.Val, name.Val,
-                           configMacros.Val, includePath.Val));
+  Result =
+      GET_OR_DISTINCT(DIModule, (Context, scope.Val, name.Val, configMacros.Val,
+                                 includePath.Val, apinotes.Val));
   return false;
 }
 
@@ -7229,8 +7234,9 @@ int LLParser::ParseGetElementPtr(Instruction *&Inst, PerFunctionState &PFS) {
   bool AteExtraComma = false;
   // GEP returns a vector of pointers if at least one of parameters is a vector.
   // All vector parameters should have the same vector width.
-  ElementCount GEPWidth = BaseType->isVectorTy() ?
-    BaseType->getVectorElementCount() : ElementCount(0, false);
+  ElementCount GEPWidth = BaseType->isVectorTy()
+                              ? cast<VectorType>(BaseType)->getElementCount()
+                              : ElementCount(0, false);
 
   while (EatIfPresent(lltok::comma)) {
     if (Lex.getKind() == lltok::MetadataVar) {
@@ -7241,8 +7247,8 @@ int LLParser::ParseGetElementPtr(Instruction *&Inst, PerFunctionState &PFS) {
     if (!Val->getType()->isIntOrIntVectorTy())
       return Error(EltLoc, "getelementptr index must be an integer");
 
-    if (Val->getType()->isVectorTy()) {
-      ElementCount ValNumEl = Val->getType()->getVectorElementCount();
+    if (auto *ValVTy = dyn_cast<VectorType>(Val->getType())) {
+      ElementCount ValNumEl = ValVTy->getElementCount();
       if (GEPWidth != ElementCount(0, false) && GEPWidth != ValNumEl)
         return Error(EltLoc,
           "getelementptr vector index has a wrong number of elements");

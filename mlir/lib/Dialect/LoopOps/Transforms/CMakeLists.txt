@@ -5,9 +5,17 @@ add_mlir_dialect_library(MLIRLoopOpsTransforms
 
   ADDITIONAL_HEADER_DIRS
   ${MLIR_MAIN_INCLUDE_DIR}/mlir/Dialect/LoopOps
-  )
 
+  DEPENDS
+  MLIRLoopPassIncGen
+  )
 target_link_libraries(MLIRLoopOpsTransforms
+  PUBLIC
+  MLIRAffine
+  MLIRIR
   MLIRPass
   MLIRLoopOps
+  MLIRStandardOps
+  MLIRSupport
+  LLVMSupport
   )

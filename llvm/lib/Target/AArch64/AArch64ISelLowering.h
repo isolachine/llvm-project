@@ -263,6 +263,7 @@ enum NodeType : unsigned {
 
   // Non-temporal gather loads
   GLDNT1,
+  GLDNT1_INDEX,
   GLDNT1S,
 
   // Scatter store
@@ -276,6 +277,7 @@ enum NodeType : unsigned {
 
   // Non-temporal scatter store
   SSTNT1,
+  SSTNT1_INDEX,
 
   // Strict (exception-raising) floating point comparison
   STRICT_FCMP = ISD::FIRST_TARGET_STRICTFP_OPCODE,
@@ -540,7 +542,7 @@ public:
 
   /// If a physical register, this returns the register that receives the
   /// exception address on entry to an EH pad.
-  unsigned
+  Register
   getExceptionPointerRegister(const Constant *PersonalityFn) const override {
     // FIXME: This is a guess. Has this been defined yet?
     return AArch64::X0;
@@ -548,7 +550,7 @@ public:
 
   /// If a physical register, this returns the register that receives the
   /// exception typeid on entry to a landing pad.
-  unsigned
+  Register
   getExceptionSelectorRegister(const Constant *PersonalityFn) const override {
     // FIXME: This is a guess. Has this been defined yet?
     return AArch64::X1;
@@ -857,6 +859,9 @@ private:
   bool shouldNormalizeToSelectSequence(LLVMContext &, EVT) const override;
 
   void finalizeLowering(MachineFunction &MF) const override;
+
+  bool shouldLocalize(const MachineInstr &MI,
+                      const TargetTransformInfo *TTI) const override;
 };
 
 namespace AArch64 {

@@ -13,17 +13,17 @@
 #ifndef LOOP_OPS
 #define LOOP_OPS
 
-include "mlir/IR/OpBase.td"
-include "mlir/Transforms/LoopLikeInterface.td"
+include "mlir/Interfaces/LoopLikeInterface.td"
+include "mlir/Interfaces/SideEffects.td"
 
-def Loop_Dialect : Dialect {
+def LoopOps_Dialect : Dialect {
   let name = "loop";
   let cppNamespace = "";
 }
 
 // Base class for Loop dialect ops.
 class Loop_Op<string mnemonic, list<OpTrait> traits = []> :
-    Op<Loop_Dialect, mnemonic, traits> {
+    Op<LoopOps_Dialect, mnemonic, traits> {
   // For every standard op, there needs to be a:
   //   * void print(OpAsmPrinter &p, ${C++ class of Op} op)
   //   * LogicalResult verify(${C++ class of Op} op)
@@ -37,12 +37,13 @@ class Loop_Op<string mnemonic, list<OpTrait> traits = []> :
 
 def ForOp : Loop_Op<"for",
       [DeclareOpInterfaceMethods<LoopLikeOpInterface>,
-       SingleBlockImplicitTerminator<"YieldOp">]> {
+       SingleBlockImplicitTerminator<"YieldOp">,
+       RecursiveSideEffects]> {
   let summary = "for operation";
   let description = [{
-    The "loop.for" operation represents a loop taking 3 SSA value as
-    operands that represent the lower bound, upper bound and step respectively.
-    The operation defines an SSA value for its induction variable. It has one
+    The "loop.for" operation represents a loop taking 3 SSA value as operands
+    that represent the lower bound, upper bound and step respectively.  The
+    operation defines an SSA value for its induction variable. It has one
     region capturing the loop body. The induction variable is represented as an
     argument of this region. This SSA value always has type index, which is the
     size of the machine word. The step is a value of type index, required to be
@@ -51,17 +52,17 @@ def ForOp : Loop_Op<"for",
     the lower bound but does not include the upper bound.
 
     The body region must contain exactly one block that terminates with
-    "loop.yield".  Calling ForOp::build will create such a region and insert
-    the terminator implicitly if none is defined, so will the parsing even
-    in cases when it is absent from the custom format. For example:
+    "loop.yield". Calling ForOp::build will create such a region and insert
+    the terminator implicitly if none is defined, so will the parsing even in
+    cases when it is absent from the custom format. For example:
 
     ```mlir
-       loop.for %iv = %lb to %ub step %step {
-         ... // body
-       }
+    loop.for %iv = %lb to %ub step %step {
+      ... // body
+    }
     ```
 
-    "loop.for" can also operate on loop-carried variables and returns the final
+    `loop.for` can also operate on loop-carried variables and returns the final
     values after loop termination. The initial values of the variables are
     passed as additional SSA operands to the "loop.for" following the 3 loop
     control SSA values mentioned above (lower bound, upper bound and step). The
@@ -70,9 +71,11 @@ def ForOp : Loop_Op<"for",
 
     The region must terminate with a "loop.yield" that passes all the current
     iteration variables to the next iteration, or to the "loop.for" result, if
-    at the last iteration.  "loop.for" results hold the final values after the
-    last iteration.
+    at the last iteration. Note, that when the loop-carried variables are
+    present, calling ForOp::build will not insert the terminator implicitly.
+    The caller must insert "loop.yield" in that case.
 
+    "loop.for" results hold the final values after the last iteration.
     For example, to sum-reduce a memref:
 
     ```mlir
@@ -97,8 +100,8 @@ def ForOp : Loop_Op<"for",
     The number and types of the "loop.for" results must match the initial
     values in the "iter_args" binding and the yield operands.
 
-    Another example with a nested "loop.if" (see "loop.if" for details)
-    to perform conditional reduction:
+    Another example with a nested "loop.if" (see "loop.if" for details) to
+    perform conditional reduction:
 
     ```mlir
     func @conditional_reduce(%buffer: memref<1024xf32>, %lb: index,
@@ -119,7 +122,7 @@ def ForOp : Loop_Op<"for",
       }
       return %sum : f32
     }
-  ```
+    ```
   }];
   let arguments = (ins Index:$lowerBound,
                        Index:$upperBound,
@@ -131,7 +134,8 @@ def ForOp : Loop_Op<"for",
   let skipDefaultBuilders = 1;
   let builders = [
     OpBuilder<"Builder *builder, OperationState &result, "
-              "Value lowerBound, Value upperBound, Value step">
+              "Value lowerBound, Value upperBound, Value step, "
+              "ValueRange iterArgs = llvm::None">
   ];
 
   let extraClassDeclaration = [{
@@ -140,10 +144,10 @@ def ForOp : Loop_Op<"for",
     OpBuilder getBodyBuilder() {
       return OpBuilder(getBody(), std::prev(getBody()->end()));
     }
-    iterator_range<Block::args_iterator> getRegionIterArgs() {
+    Block::BlockArgListType getRegionIterArgs() {
       return getBody()->getArguments().drop_front();
     }
-    iterator_range<Operation::operand_iterator> getIterOperands() {
+    Operation::operand_range getIterOperands() {
       return getOperands().drop_front(getNumControlOperands());
     }
 
@@ -169,47 +173,50 @@ def ForOp : Loop_Op<"for",
 }
 
 def IfOp : Loop_Op<"if",
-      [SingleBlockImplicitTerminator<"YieldOp">]> {
+      [SingleBlockImplicitTerminator<"YieldOp">, RecursiveSideEffects]> {
   let summary = "if-then-else operation";
   let description = [{
-    The "loop.if" operation represents an if-then-else construct for
+    The `loop.if` operation represents an if-then-else construct for
     conditionally executing two regions of code. The operand to an if operation
     is a boolean value. For example:
 
     ```mlir
-       loop.if %b  {
-         ...
-       } else {
-         ...
-       }
+    loop.if %b  {
+      ...
+    } else {
+      ...
+    }
     ```
 
-    "loop.if" may also return results that are defined in its regions. The
+    `loop.if` may also return results that are defined in its regions. The
     values defined are determined by which execution path is taken.
-    For example:
+
+    Example:
+
     ```mlir
-       %x, %y = loop.if %b -> (f32, f32) {
-         %x_true = ...
-         %y_true = ...
-         loop.yield %x_true, %y_true : f32, f32
-       } else {
-         %x_false = ...
-         %y_false = ...
-         loop.yield %x_false, %y_false : f32, f32
-       }
+    %x, %y = loop.if %b -> (f32, f32) {
+      %x_true = ...
+      %y_true = ...
+      loop.yield %x_true, %y_true : f32, f32
+    } else {
+      %x_false = ...
+      %y_false = ...
+      loop.yield %x_false, %y_false : f32, f32
+    }
     ```
 
-    "loop.if" regions are always terminated with "loop.yield". If "loop.if"
-    defines no values, the "loop.yield" can be left out, and will be
-    inserted implicitly. Otherwise, it must be explicit.
-    Also, if "loop.if" defines one or more values, the 'else' block cannot
-    be omitted.
+    `loop.if` regions are always terminated with "loop.yield". If "loop.if"
+    defines no values, the "loop.yield" can be left out, and will be inserted
+    implicitly. Otherwise, it must be explicit.
+    Also, if "loop.if" defines one or more values, the 'else' block cannot be
+    omitted.
 
-    For example:
+    Example:
+
     ```mlir
-       loop.if %b  {
-         ...
-       }
+    loop.if %b  {
+      ...
+    }
     ```
   }];
   let arguments = (ins I1:$condition);
@@ -219,25 +226,31 @@ def IfOp : Loop_Op<"if",
   let skipDefaultBuilders = 1;
   let builders = [
     OpBuilder<"Builder *builder, OperationState &result, "
-              "Value cond, bool withElseRegion">
+              "Value cond, bool withElseRegion">,
+    OpBuilder<"Builder *builder, OperationState &result, "
+              "TypeRange resultTypes, Value cond, bool withElseRegion">
   ];
 
   let extraClassDeclaration = [{
     OpBuilder getThenBodyBuilder() {
       assert(!thenRegion().empty() && "Unexpected empty 'then' region.");
       Block &body = thenRegion().front();
-      return OpBuilder(&body, std::prev(body.end()));
+      return OpBuilder(&body,
+                       results().empty() ? std::prev(body.end()) : body.end());
     }
     OpBuilder getElseBodyBuilder() {
       assert(!elseRegion().empty() && "Unexpected empty 'else' region.");
       Block &body = elseRegion().front();
-      return OpBuilder(&body, std::prev(body.end()));
+      return OpBuilder(&body,
+                       results().empty() ? std::prev(body.end()) : body.end());
     }
   }];
 }
 
 def ParallelOp : Loop_Op<"parallel",
-    [AttrSizedOperandSegments, SingleBlockImplicitTerminator<"YieldOp">]> {
+    [AttrSizedOperandSegments,
+     DeclareOpInterfaceMethods<LoopLikeOpInterface>,
+     SingleBlockImplicitTerminator<"YieldOp">]> {
   let summary = "parallel for operation";
   let description = [{
     The "loop.parallel" operation represents a loop nest taking 4 groups of SSA
@@ -250,7 +263,7 @@ def ParallelOp : Loop_Op<"parallel",
     The lower and upper bounds specify a half-open range: the range includes
     the lower bound but does not include the upper bound. The initial values
     have the same types as results of "loop.parallel". If there are no results,
-    the keyword `init` can be omitted. 
+    the keyword `init` can be omitted.
 
     Semantically we require that the iteration space can be iterated in any
     order, and the loop body can be executed in parallel. If there are data
@@ -260,27 +273,28 @@ def ParallelOp : Loop_Op<"parallel",
     individual iterations into a single result. This is modeled using the
     loop.reduce operation (see loop.reduce for details). Each result of a
     loop.parallel operation is associated with an initial value operand and
-    reduce operation that is an immediate child. Reductions are matched to result
-    and initial values in order of their appearance in the body. Consequently,
-    we require that the body region has the same number of results and initial
-    values as it has reduce operations.
+    reduce operation that is an immediate child. Reductions are matched to
+    result and initial values in order of their appearance in the body.
+    Consequently, we require that the body region has the same number of
+    results and initial values as it has reduce operations.
 
     The body region must contain exactly one block that terminates with
     "loop.yield" without operands. Parsing ParallelOp will create such a region
     and insert the terminator when it is absent from the custom format.
-    For example:
+
+    Example:
 
     ```mlir
-       loop.parallel (%iv) = (%lb) to (%ub) step (%step) {
-         %zero = constant 0.0 : f32
-         loop.reduce(%zero) {
-           ^bb0(%lhs : f32, %rhs: f32):
-             %res = addf %lhs, %rhs : f32
-             loop.reduce.return %res : f32
-         } : f32
-       }
+    loop.parallel (%iv) = (%lb) to (%ub) step (%step) -> f32 {
+      %zero = constant 0.0 : f32
+      loop.reduce(%zero) : f32 {
+        ^bb0(%lhs : f32, %rhs: f32):
+          %res = addf %lhs, %rhs : f32
+          loop.reduce.return %res : f32
+      }
+    }
     ```
-   }];
+  }];
 
   let arguments = (ins Variadic<Index>:$lowerBound,
                        Variadic<Index>:$upperBound,
@@ -298,10 +312,7 @@ def ParallelOp : Loop_Op<"parallel",
 
   let extraClassDeclaration = [{
     Block *getBody() { return &region().front(); }
-    unsigned getNumInductionVars() {
-      return getBody()->getNumArguments();
-    }
-    iterator_range<Block::args_iterator> getInductionVars() {
+    ValueRange getInductionVars() {
       return getBody()->getArguments();
     }
     unsigned getNumLoops() { return step().size(); }
@@ -321,10 +332,10 @@ def ReduceOp : Loop_Op<"reduce", [HasParent<"ParallelOp">]> {
     "loop.parallel" and is associated with a result value of its parent
     operation.
 
-    Association is in the order of appearance in the body where the first result
-    of a parallel loop operation corresponds to the first "loop.reduce" in the
-    operation's body region. The reduce operation takes a single operand, which
-    is the value to be used in the reduction.
+    Association is in the order of appearance in the body where the first
+    result of a parallel loop operation corresponds to the first "loop.reduce"
+    in the operation's body region. The reduce operation takes a single
+    operand, which is the value to be used in the reduction.
 
     The reduce operation contains a region whose entry block expects two
     arguments of the same type as the operand. As the iteration order of the
@@ -337,14 +348,13 @@ def ReduceOp : Loop_Op<"reduce", [HasParent<"ParallelOp">]> {
     Example:
 
     ```mlir
-      %operand = constant 1.0 : f32
-      loop.reduce(%operand) {
-        ^bb0(%lhs : f32, %rhs: f32):
-          %res = addf %lhs, %rhs : f32
-          loop.reduce.return %res : f32
-      } : f32
+    %operand = constant 1.0 : f32
+    loop.reduce(%operand) : f32 {
+      ^bb0(%lhs : f32, %rhs: f32):
+        %res = addf %lhs, %rhs : f32
+        loop.reduce.return %res : f32
+    }
     ```
-
   }];
 
   let skipDefaultBuilders = 1;
@@ -358,7 +368,8 @@ def ReduceOp : Loop_Op<"reduce", [HasParent<"ParallelOp">]> {
 }
 
 def ReduceReturnOp :
-    Loop_Op<"reduce.return", [HasParent<"ReduceOp">, Terminator]> {
+    Loop_Op<"reduce.return", [HasParent<"ReduceOp">, NoSideEffect,
+                              Terminator]> {
   let summary = "terminator for reduce operation";
   let description = [{
     "loop.reduce.return" is a special terminator operation for the block inside
@@ -366,7 +377,7 @@ def ReduceReturnOp :
     the operand of "loop.reduce". Example for the custom format:
 
     ```mlir
-      loop.reduce.return %res : f32
+    loop.reduce.return %res : f32
     ```
   }];
 
@@ -374,18 +385,18 @@ def ReduceReturnOp :
   let assemblyFormat = "$result attr-dict `:` type($result)";
 }
 
-def YieldOp : Loop_Op<"yield", [Terminator]> {
+def YieldOp : Loop_Op<"yield", [NoSideEffect, Terminator]> {
   let summary = "loop yield and termination operation";
   let description = [{
     "loop.yield" yields an SSA value from a loop dialect op region and
-    terminates the regions. The semantics of how the values are yielded
-    is defined by the parent operation.
+    terminates the regions. The semantics of how the values are yielded is
+    defined by the parent operation.
     If "loop.yield" has any operands, the operands must match the parent
     operation's results.
     If the parent operation defines no values, then the "loop.yield" may be
     left out in the custom syntax and the builders will insert one implicitly.
-    Otherwise, it has to be present in the syntax to indicate which values
-    are yielded.
+    Otherwise, it has to be present in the syntax to indicate which values are
+    yielded.
   }];
 
   let arguments = (ins Variadic<AnyType>:$results);

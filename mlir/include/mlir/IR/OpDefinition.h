@@ -368,6 +368,10 @@ LogicalResult verifyAtLeastNOperands(Operation *op, unsigned numOperands);
 LogicalResult verifyOperandsAreFloatLike(Operation *op);
 LogicalResult verifyOperandsAreSignlessIntegerLike(Operation *op);
 LogicalResult verifySameTypeOperands(Operation *op);
+LogicalResult verifyZeroRegion(Operation *op);
+LogicalResult verifyOneRegion(Operation *op);
+LogicalResult verifyNRegions(Operation *op, unsigned numRegions);
+LogicalResult verifyAtLeastNRegions(Operation *op, unsigned numRegions);
 LogicalResult verifyZeroResult(Operation *op);
 LogicalResult verifyOneResult(Operation *op);
 LogicalResult verifyNResults(Operation *op, unsigned numOperands);
@@ -381,6 +385,10 @@ LogicalResult verifyResultsAreBoolLike(Operation *op);
 LogicalResult verifyResultsAreFloatLike(Operation *op);
 LogicalResult verifyResultsAreSignlessIntegerLike(Operation *op);
 LogicalResult verifyIsTerminator(Operation *op);
+LogicalResult verifyZeroSuccessor(Operation *op);
+LogicalResult verifyOneSuccessor(Operation *op);
+LogicalResult verifyNSuccessors(Operation *op, unsigned numSuccessors);
+LogicalResult verifyAtLeastNSuccessors(Operation *op, unsigned numSuccessors);
 LogicalResult verifyOperandSizeAttr(Operation *op, StringRef sizeAttrName);
 LogicalResult verifyResultSizeAttr(Operation *op, StringRef sizeAttrName);
 } // namespace impl
@@ -409,6 +417,9 @@ protected:
     return 0;
   }
 };
+
+//===----------------------------------------------------------------------===//
+// Operand Traits
 
 namespace detail {
 /// Utility trait base that provides accessors for derived traits that have
@@ -521,6 +532,92 @@ public:
 template <typename ConcreteType>
 class VariadicOperands
     : public detail::MultiOperandTraitBase<ConcreteType, VariadicOperands> {};
+
+//===----------------------------------------------------------------------===//
+// Region Traits
+
+/// This class provides verification for ops that are known to have zero
+/// regions.
+template <typename ConcreteType>
+class ZeroRegion : public TraitBase<ConcreteType, ZeroRegion> {
+public:
+  static LogicalResult verifyTrait(Operation *op) {
+    return impl::verifyZeroRegion(op);
+  }
+};
+
+namespace detail {
+/// Utility trait base that provides accessors for derived traits that have
+/// multiple regions.
+template <typename ConcreteType, template <typename> class TraitType>
+struct MultiRegionTraitBase : public TraitBase<ConcreteType, TraitType> {
+  using region_iterator = MutableArrayRef<Region>;
+  using region_range = RegionRange;
+
+  /// Return the number of regions.
+  unsigned getNumRegions() { return this->getOperation()->getNumRegions(); }
+
+  /// Return the region at `index`.
+  Region &getRegion(unsigned i) { return this->getOperation()->getRegion(i); }
+
+  /// Region iterator access.
+  region_iterator region_begin() {
+    return this->getOperation()->region_begin();
+  }
+  region_iterator region_end() { return this->getOperation()->region_end(); }
+  region_range getRegions() { return this->getOperation()->getRegions(); }
+};
+} // end namespace detail
+
+/// This class provides APIs for ops that are known to have a single region.
+template <typename ConcreteType>
+class OneRegion : public TraitBase<ConcreteType, OneRegion> {
+public:
+  Region &getRegion() { return this->getOperation()->getRegion(0); }
+
+  static LogicalResult verifyTrait(Operation *op) {
+    return impl::verifyOneRegion(op);
+  }
+};
+
+/// This class provides the API for ops that are known to have a specified
+/// number of regions.
+template <unsigned N> class NRegions {
+public:
+  static_assert(N > 1, "use ZeroRegion/OneRegion for N < 2");
+
+  template <typename ConcreteType>
+  class Impl
+      : public detail::MultiRegionTraitBase<ConcreteType, NRegions<N>::Impl> {
+  public:
+    static LogicalResult verifyTrait(Operation *op) {
+      return impl::verifyNRegions(op, N);
+    }
+  };
+};
+
+/// This class provides APIs for ops that are known to have at least a specified
+/// number of regions.
+template <unsigned N> class AtLeastNRegions {
+public:
+  template <typename ConcreteType>
+  class Impl : public detail::MultiRegionTraitBase<ConcreteType,
+                                                   AtLeastNRegions<N>::Impl> {
+  public:
+    static LogicalResult verifyTrait(Operation *op) {
+      return impl::verifyAtLeastNRegions(op, N);
+    }
+  };
+};
+
+/// This class provides the API for ops which have an unknown number of
+/// regions.
+template <typename ConcreteType>
+class VariadicRegions
+    : public detail::MultiRegionTraitBase<ConcreteType, VariadicRegions> {};
+
+//===----------------------------------------------------------------------===//
+// Result Traits
 
 /// This class provides return value APIs for ops that are known to have
 /// zero results.
@@ -644,6 +741,119 @@ template <typename ConcreteType>
 class VariadicResults
     : public detail::MultiResultTraitBase<ConcreteType, VariadicResults> {};
 
+//===----------------------------------------------------------------------===//
+// Terminator Traits
+
+/// This class provides the API for ops that are known to be terminators.
+template <typename ConcreteType>
+class IsTerminator : public TraitBase<ConcreteType, IsTerminator> {
+public:
+  static AbstractOperation::OperationProperties getTraitProperties() {
+    return static_cast<AbstractOperation::OperationProperties>(
+        OperationProperty::Terminator);
+  }
+  static LogicalResult verifyTrait(Operation *op) {
+    return impl::verifyIsTerminator(op);
+  }
+};
+
+/// This class provides verification for ops that are known to have zero
+/// successors.
+template <typename ConcreteType>
+class ZeroSuccessor : public TraitBase<ConcreteType, ZeroSuccessor> {
+public:
+  static LogicalResult verifyTrait(Operation *op) {
+    return impl::verifyZeroSuccessor(op);
+  }
+};
+
+namespace detail {
+/// Utility trait base that provides accessors for derived traits that have
+/// multiple successors.
+template <typename ConcreteType, template <typename> class TraitType>
+struct MultiSuccessorTraitBase : public TraitBase<ConcreteType, TraitType> {
+  using succ_iterator = Operation::succ_iterator;
+  using succ_range = SuccessorRange;
+
+  /// Return the number of successors.
+  unsigned getNumSuccessors() {
+    return this->getOperation()->getNumSuccessors();
+  }
+
+  /// Return the successor at `index`.
+  Block *getSuccessor(unsigned i) {
+    return this->getOperation()->getSuccessor(i);
+  }
+
+  /// Set the successor at `index`.
+  void setSuccessor(Block *block, unsigned i) {
+    return this->getOperation()->setSuccessor(block, i);
+  }
+
+  /// Successor iterator access.
+  succ_iterator succ_begin() { return this->getOperation()->succ_begin(); }
+  succ_iterator succ_end() { return this->getOperation()->succ_end(); }
+  succ_range getSuccessors() { return this->getOperation()->getSuccessors(); }
+};
+} // end namespace detail
+
+/// This class provides APIs for ops that are known to have a single successor.
+template <typename ConcreteType>
+class OneSuccessor : public TraitBase<ConcreteType, OneSuccessor> {
+public:
+  Block *getSuccessor() { return this->getOperation()->getSuccessor(0); }
+  void setSuccessor(Block *succ) {
+    this->getOperation()->setSuccessor(succ, 0);
+  }
+
+  static LogicalResult verifyTrait(Operation *op) {
+    return impl::verifyOneSuccessor(op);
+  }
+};
+
+/// This class provides the API for ops that are known to have a specified
+/// number of successors.
+template <unsigned N>
+class NSuccessors {
+public:
+  static_assert(N > 1, "use ZeroSuccessor/OneSuccessor for N < 2");
+
+  template <typename ConcreteType>
+  class Impl : public detail::MultiSuccessorTraitBase<ConcreteType,
+                                                      NSuccessors<N>::Impl> {
+  public:
+    static LogicalResult verifyTrait(Operation *op) {
+      return impl::verifyNSuccessors(op, N);
+    }
+  };
+};
+
+/// This class provides APIs for ops that are known to have at least a specified
+/// number of successors.
+template <unsigned N>
+class AtLeastNSuccessors {
+public:
+  template <typename ConcreteType>
+  class Impl
+      : public detail::MultiSuccessorTraitBase<ConcreteType,
+                                               AtLeastNSuccessors<N>::Impl> {
+  public:
+    static LogicalResult verifyTrait(Operation *op) {
+      return impl::verifyAtLeastNSuccessors(op, N);
+    }
+  };
+};
+
+/// This class provides the API for ops which have an unknown number of
+/// successors.
+template <typename ConcreteType>
+class VariadicSuccessors
+    : public detail::MultiSuccessorTraitBase<ConcreteType, VariadicSuccessors> {
+};
+
+//===----------------------------------------------------------------------===//
+// Misc Traits
+
 /// This class provides verification for ops that are known to have the same
 /// operand shape: all operands are scalars, vectors/tensors of the same
 /// shape.
@@ -747,16 +957,6 @@ public:
   }
 };
 
-/// This class adds property that the operation has no side effects.
-template <typename ConcreteType>
-class HasNoSideEffect : public TraitBase<ConcreteType, HasNoSideEffect> {
-public:
-  static AbstractOperation::OperationProperties getTraitProperties() {
-    return static_cast<AbstractOperation::OperationProperties>(
-        OperationProperty::NoSideEffect);
-  }
-};
-
 /// This class verifies that all operands of the specified op have a float type,
 /// a vector thereof, or a tensor thereof.
 template <typename ConcreteType>
@@ -789,38 +989,22 @@ public:
   }
 };
 
-/// This class provides the API for ops that are known to be terminators.
+/// This class provides the API for a sub-set of ops that are known to be
+/// constant-like. These are non-side effecting operations with one result and
+/// zero operands that can always be folded to a specific attribute value.
 template <typename ConcreteType>
-class IsTerminator : public TraitBase<ConcreteType, IsTerminator> {
+class ConstantLike : public TraitBase<ConcreteType, ConstantLike> {
 public:
-  static AbstractOperation::OperationProperties getTraitProperties() {
-    return static_cast<AbstractOperation::OperationProperties>(
-        OperationProperty::Terminator);
-  }
   static LogicalResult verifyTrait(Operation *op) {
-    return impl::verifyIsTerminator(op);
-  }
-
-  unsigned getNumSuccessors() {
-    return this->getOperation()->getNumSuccessors();
-  }
-  unsigned getNumSuccessorOperands(unsigned index) {
-    return this->getOperation()->getNumSuccessorOperands(index);
-  }
-
-  Block *getSuccessor(unsigned index) {
-    return this->getOperation()->getSuccessor(index);
-  }
-
-  void setSuccessor(Block *block, unsigned index) {
-    return this->getOperation()->setSuccessor(block, index);
-  }
-
-  void addSuccessorOperand(unsigned index, Value value) {
-    return this->getOperation()->addSuccessorOperand(index, value);
-  }
-  void addSuccessorOperands(unsigned index, ArrayRef<Value> values) {
-    return this->getOperation()->addSuccessorOperand(index, values);
+    static_assert(ConcreteType::template hasTrait<OneResult>(),
+                  "expected operation to produce one result");
+    static_assert(ConcreteType::template hasTrait<ZeroOperands>(),
+                  "expected operation to take zero operands");
+    // TODO: We should verify that the operation can always be folded, but this
+    // requires that the attributes of the op already be verified. We should add
+    // support for verifying traits "after" the operation to enable this use
+    // case.
+    return success();
   }
 };
 
@@ -838,6 +1022,22 @@ public:
     for (auto &region : op->getRegions())
       if (!region.isIsolatedFromAbove(op->getLoc()))
         return failure();
+    return success();
+  }
+};
+
+/// A trait of region holding operations that define a new scope for automatic
+/// allocations, i.e., allocations that are freed when control is transferred
+/// back from the operation's region. Any operations performing such allocations
+/// (for eg. std.alloca) will have their allocations automatically freed at
+/// their closest enclosing operation with this trait.
+template <typename ConcreteType>
+class AutomaticAllocationScope
+    : public TraitBase<ConcreteType, AutomaticAllocationScope> {
+public:
+  static LogicalResult verifyTrait(Operation *op) {
+    if (op->hasTrait<ZeroRegion>())
+      return op->emitOpError("is expected to have regions");
     return success();
   }
 };
@@ -985,7 +1185,7 @@ public:
   /// Return true if this "op class" can match against the specified operation.
   static bool classof(Operation *op) {
     if (auto *abstractOp = op->getAbstractOperation())
-      return ClassID::getID<ConcreteType>() == abstractOp->classID;
+      return TypeID::get<ConcreteType>() == abstractOp->typeID;
     return op->getName().getStringRef() == ConcreteType::getOperationName();
   }
 
@@ -1078,15 +1278,15 @@ private:
     }
   };
 
-  /// Returns true if this operation contains the trait for the given classID.
-  static bool hasTrait(ClassID *traitID) {
-    return llvm::is_contained(llvm::makeArrayRef({ClassID::getID<Traits>()...}),
+  /// Returns true if this operation contains the trait for the given typeID.
+  static bool hasTrait(TypeID traitID) {
+    return llvm::is_contained(llvm::makeArrayRef({TypeID::get<Traits>()...}),
                               traitID);
   }
 
   /// Returns an opaque pointer to a concept instance of the interface with the
   /// given ID if one was registered to this operation.
-  static void *getRawInterface(ClassID *id) {
+  static void *getRawInterface(TypeID id) {
     return InterfaceLookup::template lookup<Traits<ConcreteType>...>(id);
   }
 
@@ -1100,7 +1300,7 @@ private:
     template <typename T>
     static typename std::enable_if<is_detected<has_get_interface_id, T>::value,
                                    void *>::type
-    lookup(ClassID *interfaceID) {
+    lookup(TypeID interfaceID) {
       return (T::getInterfaceID() == interfaceID) ? &T::instance() : nullptr;
     }
 
@@ -1108,12 +1308,12 @@ private:
     template <typename T>
     static typename std::enable_if<!is_detected<has_get_interface_id, T>::value,
                                    void *>::type
-    lookup(ClassID *) {
+    lookup(TypeID) {
       return nullptr;
     }
 
     template <typename T, typename T2, typename... Ts>
-    static void *lookup(ClassID *interfaceID) {
+    static void *lookup(TypeID interfaceID) {
       auto *concept = lookup<T>(interfaceID);
       return concept ? concept : lookup<T2, Ts...>(interfaceID);
     }
@@ -1159,14 +1359,14 @@ public:
   static bool classof(Operation *op) { return getInterfaceFor(op); }
 
   /// Define an accessor for the ID of this interface.
-  static ClassID *getInterfaceID() { return ClassID::getID<ConcreteType>(); }
+  static TypeID getInterfaceID() { return TypeID::get<ConcreteType>(); }
 
   /// This is a special trait that registers a given interface with an
   /// operation.
   template <typename ConcreteOp>
   struct Trait : public OpTrait::TraitBase<ConcreteOp, Trait> {
     /// Define an accessor for the ID of this interface.
-    static ClassID *getInterfaceID() { return ClassID::getID<ConcreteType>(); }
+    static TypeID getInterfaceID() { return TypeID::get<ConcreteType>(); }
 
     /// Provide an accessor to a static instance of the interface model for the
     /// concrete operation type.
@@ -1198,6 +1398,10 @@ private:
   /// A pointer to the impl concept object.
   Concept *impl;
 };
+
+//===----------------------------------------------------------------------===//
+// Common Operation Folders/Parsers/Printers
+//===----------------------------------------------------------------------===//
 
 // These functions are out-of-line implementations of the methods in UnaryOp and
 // BinaryOp, which avoids them being template instantiated/duplicated.

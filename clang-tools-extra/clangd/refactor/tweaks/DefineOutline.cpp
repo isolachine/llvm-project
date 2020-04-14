@@ -239,21 +239,22 @@ getFunctionSourceCode(const FunctionDecl *FD, llvm::StringRef TargetNamespace,
   DelAttr(FD->getAttr<OverrideAttr>());
   DelAttr(FD->getAttr<FinalAttr>());
 
-  if (FD->isVirtualAsWritten()) {
-    SourceRange SpecRange{FD->getBeginLoc(), FD->getLocation()};
-    bool HasErrors = true;
-
-    // Clang allows duplicating virtual specifiers so check for multiple
-    // occurances.
-    for (const auto &Tok : TokBuf.expandedTokens(SpecRange)) {
-      if (Tok.kind() != tok::kw_virtual)
+  auto DelKeyword = [&](tok::TokenKind Kind, SourceRange FromRange) {
+    bool FoundAny = false;
+    for (const auto &Tok : TokBuf.expandedTokens(FromRange)) {
+      if (Tok.kind() != Kind)
         continue;
+      FoundAny = true;
       auto Spelling = TokBuf.spelledForExpanded(llvm::makeArrayRef(Tok));
       if (!Spelling) {
-        HasErrors = true;
+        Errors = llvm::joinErrors(
+            std::move(Errors),
+            llvm::createStringError(
+                llvm::inconvertibleErrorCode(),
+                llvm::formatv("define outline: couldn't remove `{0}` keyword.",
+                              tok::getKeywordSpelling(Kind))));
         break;
       }
-      HasErrors = false;
       CharSourceRange DelRange =
           syntax::Token::range(SM, Spelling->front(), Spelling->back())
               .toCharRange(SM);
@@ -261,13 +262,22 @@ getFunctionSourceCode(const FunctionDecl *FD, llvm::StringRef TargetNamespace,
               DeclarationCleanups.add(tooling::Replacement(SM, DelRange, "")))
         Errors = llvm::joinErrors(std::move(Errors), std::move(Err));
     }
-    if (HasErrors) {
+    if (!FoundAny) {
       Errors = llvm::joinErrors(
           std::move(Errors),
-          llvm::createStringError(llvm::inconvertibleErrorCode(),
-                                  "define outline: Can't move out of line as "
-                                  "function has a macro `virtual` specifier."));
+          llvm::createStringError(
+              llvm::inconvertibleErrorCode(),
+              llvm::formatv(
+                  "define outline: couldn't find `{0}` keyword to remove.",
+                  tok::getKeywordSpelling(Kind))));
     }
+  };
+
+  if (const auto *MD = dyn_cast<CXXMethodDecl>(FD)) {
+    if (MD->isVirtualAsWritten())
+      DelKeyword(tok::kw_virtual, {FD->getBeginLoc(), FD->getLocation()});
+    if (MD->isStatic())
+      DelKeyword(tok::kw_static, {FD->getBeginLoc(), FD->getLocation()});
   }
 
   if (Errors)
@@ -284,14 +294,14 @@ struct InsertionPoint {
 // should also try to follow ordering of declarations. For example, if decls
 // come in order `foo, bar, baz` then this function should return some point
 // between foo and baz for inserting bar.
-llvm::Expected<InsertionPoint>
-getInsertionPoint(llvm::StringRef Contents, llvm::StringRef QualifiedName,
-                  const format::FormatStyle &Style) {
-  auto Region = getEligiblePoints(Contents, QualifiedName, Style);
+llvm::Expected<InsertionPoint> getInsertionPoint(llvm::StringRef Contents,
+                                                 llvm::StringRef QualifiedName,
+                                                 const LangOptions &LangOpts) {
+  auto Region = getEligiblePoints(Contents, QualifiedName, LangOpts);
 
   assert(!Region.EligiblePoints.empty());
   // FIXME: This selection can be made smarter by looking at the definition
-  // locations for adjacent decls to Source. Unfortunately psudeo parsing in
+  // locations for adjacent decls to Source. Unfortunately pseudo parsing in
   // getEligibleRegions only knows about namespace begin/end events so we
   // can't match function start/end positions yet.
   auto Offset = positionToOffset(Contents, Region.EligiblePoints.back());
@@ -416,9 +426,10 @@ public:
       return llvm::createStringError(Buffer.getError(),
                                      Buffer.getError().message());
     auto Contents = Buffer->get()->getBuffer();
-    auto InsertionPoint =
-        getInsertionPoint(Contents, Source->getQualifiedNameAsString(),
-                          getFormatStyleForFile(*CCFile, Contents, &FS));
+    auto LangOpts = format::getFormattingLangOpts(
+        getFormatStyleForFile(*CCFile, Contents, &FS));
+    auto InsertionPoint = getInsertionPoint(
+        Contents, Source->getQualifiedNameAsString(), LangOpts);
     if (!InsertionPoint)
       return InsertionPoint.takeError();
 

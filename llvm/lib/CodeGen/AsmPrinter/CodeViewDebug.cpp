@@ -250,8 +250,15 @@ unsigned CodeViewDebug::maybeRecordFile(const DIFile *F) {
       ChecksumAsBytes = ArrayRef<uint8_t>(
           reinterpret_cast<const uint8_t *>(CKMem), Checksum.size());
       switch (F->getChecksum()->Kind) {
-      case DIFile::CSK_MD5:  CSKind = FileChecksumKind::MD5; break;
-      case DIFile::CSK_SHA1: CSKind = FileChecksumKind::SHA1; break;
+      case DIFile::CSK_MD5:
+        CSKind = FileChecksumKind::MD5;
+        break;
+      case DIFile::CSK_SHA1:
+        CSKind = FileChecksumKind::SHA1;
+        break;
+      case DIFile::CSK_SHA256:
+        CSKind = FileChecksumKind::SHA256;
+        break;
       }
     }
     bool Success = OS.EmitCVFileDirective(NextId, FullPath, ChecksumAsBytes,
@@ -1175,7 +1182,7 @@ void CodeViewDebug::collectVariableInfoFromMFTable(
     }
 
     // Get the frame register used and the offset.
-    unsigned FrameReg = 0;
+    Register FrameReg;
     int FrameOffset = TFI->getFrameIndexReference(*Asm->MF, VI.Slot, FrameReg);
     uint16_t CVReg = TRI->getCodeViewRegNum(FrameReg);
 
@@ -2250,7 +2257,7 @@ TypeIndex CodeViewDebug::lowerCompleteTypeClass(const DICompositeType *Ty) {
 
   // MSVC appears to set this flag by searching any destructor or method with
   // FunctionOptions::Constructor among the emitted members. Clang AST has all
-  // the members, however special member functions are not yet emitted into 
+  // the members, however special member functions are not yet emitted into
   // debug information. For now checking a class's non-triviality seems enough.
   // FIXME: not true for a nested unnamed struct.
   if (isNonTrivial(Ty))

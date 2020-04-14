@@ -61,6 +61,8 @@ using namespace llvm;
 
 namespace {
 
+  using InstSet = SmallPtrSetImpl<MachineInstr *>;
+
   class PostOrderLoopTraversal {
     MachineLoop &ML;
     MachineLoopInfo &MLI;
@@ -508,12 +510,190 @@ bool LowOverheadLoop::ValidateTailPredicate(MachineInstr *StartInsertPt) {
   return true;
 }
 
+static bool isVectorPredicated(MachineInstr *MI) {
+  int PIdx = llvm::findFirstVPTPredOperandIdx(*MI);
+  return PIdx != -1 && MI->getOperand(PIdx + 1).getReg() == ARM::VPR;
+}
+
+static bool isRegInClass(const MachineOperand &MO,
+                         const TargetRegisterClass *Class) {
+  return MO.isReg() && MO.getReg() && Class->contains(MO.getReg());
+}
+
+// MVE 'narrowing' operate on half a lane, reading from half and writing
+// to half, which are referred to has the top and bottom half. The other
+// half retains its previous value.
+static bool retainsPreviousHalfElement(const MachineInstr &MI) {
+  const MCInstrDesc &MCID = MI.getDesc();
+  uint64_t Flags = MCID.TSFlags;
+  return (Flags & ARMII::RetainsPreviousHalfElement) != 0;
+}
+
+// Some MVE instructions read from the top/bottom halves of their operand(s)
+// and generate a vector result with result elements that are double the
+// width of the input.
+static bool producesDoubleWidthResult(const MachineInstr &MI) {
+  const MCInstrDesc &MCID = MI.getDesc();
+  uint64_t Flags = MCID.TSFlags;
+  return (Flags & ARMII::DoubleWidthResult) != 0;
+}
+
+static bool isHorizontalReduction(const MachineInstr &MI) {
+  const MCInstrDesc &MCID = MI.getDesc();
+  uint64_t Flags = MCID.TSFlags;
+  return (Flags & ARMII::HorizontalReduction) != 0;
+}
+
+// Can this instruction generate a non-zero result when given only zeroed
+// operands? This allows us to know that, given operands with false bytes
+// zeroed by masked loads, that the result will also contain zeros in those
+// bytes.
+static bool canGenerateNonZeros(const MachineInstr &MI) {
+
+  // Check for instructions which can write into a larger element size,
+  // possibly writing into a previous zero'd lane.
+  if (producesDoubleWidthResult(MI))
+    return true;
+
+  switch (MI.getOpcode()) {
+  default:
+    break;
+  // FIXME: VNEG FP and -0? I think we'll need to handle this once we allow
+  // fp16 -> fp32 vector conversions.
+  // Instructions that perform a NOT will generate 1s from 0s.
+  case ARM::MVE_VMVN:
+  case ARM::MVE_VORN:
+  // Count leading zeros will do just that!
+  case ARM::MVE_VCLZs8:
+  case ARM::MVE_VCLZs16:
+  case ARM::MVE_VCLZs32:
+    return true;
+  }
+  return false;
+}
+
+
+// Look at its register uses to see if it only can only receive zeros
+// into its false lanes which would then produce zeros. Also check that
+// the output register is also defined by an FalseLanesZero instruction
+// so that if tail-predication happens, the lanes that aren't updated will
+// still be zeros.
+static bool producesFalseLanesZero(MachineInstr &MI,
+                                   const TargetRegisterClass *QPRs,
+                                   const ReachingDefAnalysis &RDA,
+                                   InstSet &FalseLanesZero) {
+  if (canGenerateNonZeros(MI))
+    return false;
+
+  bool AllowScalars = isHorizontalReduction(MI);
+  for (auto &MO : MI.operands()) {
+    if (!MO.isReg() || !MO.getReg())
+      continue;
+    if (!isRegInClass(MO, QPRs) && AllowScalars)
+      continue;
+    if (auto *OpDef = RDA.getMIOperand(&MI, MO))
+      if (FalseLanesZero.count(OpDef))
+       continue;
+    return false;
+  }
+  LLVM_DEBUG(dbgs() << "ARM Loops: Always False Zeros: " << MI);
+  return true;
+}
+
 bool LowOverheadLoop::ValidateLiveOuts() const {
+  // We want to find out if the tail-predicated version of this loop will
+  // produce the same values as the loop in its original form. For this to
+  // be true, the newly inserted implicit predication must not change the
+  // the (observable) results.
+  // We're doing this because many instructions in the loop will not be
+  // predicated and so the conversion from VPT predication to tail-predication
+  // can result in different values being produced; due to the tail-predication
+  // preventing many instructions from updating their falsely predicated
+  // lanes. This analysis assumes that all the instructions perform lane-wise
+  // operations and don't perform any exchanges.
+  // A masked load, whether through VPT or tail predication, will write zeros
+  // to any of the falsely predicated bytes. So, from the loads, we know that
+  // the false lanes are zeroed and here we're trying to track that those false
+  // lanes remain zero, or where they change, the differences are masked away
+  // by their user(s).
+  // All MVE loads and stores have to be predicated, so we know that any load
+  // operands, or stored results are equivalent already. Other explicitly
+  // predicated instructions will perform the same operation in the original
+  // loop and the tail-predicated form too. Because of this, we can insert
+  // loads, stores and other predicated instructions into our Predicated
+  // set and build from there.
+  const TargetRegisterClass *QPRs = TRI.getRegClass(ARM::MQPRRegClassID);
+  SetVector<MachineInstr *> FalseLanesUnknown;
+  SmallPtrSet<MachineInstr *, 4> FalseLanesZero;
+  SmallPtrSet<MachineInstr *, 4> Predicated;
+  MachineBasicBlock *MBB = ML.getHeader();
+
+  for (auto &MI : *MBB) {
+    const MCInstrDesc &MCID = MI.getDesc();
+    uint64_t Flags = MCID.TSFlags;
+    if ((Flags & ARMII::DomainMask) != ARMII::DomainMVE)
+      continue;
+
+    if (isVCTP(&MI) || MI.getOpcode() == ARM::MVE_VPST)
+      continue;
+
+    // Predicated loads will write zeros to the falsely predicated bytes of the
+    // destination register.
+    if (isVectorPredicated(&MI)) {
+      if (MI.mayLoad())
+        FalseLanesZero.insert(&MI);
+      Predicated.insert(&MI);
+      continue;
+    }
+
+    if (MI.getNumDefs() == 0)
+      continue;
+
+    if (!producesFalseLanesZero(MI, QPRs, RDA, FalseLanesZero)) {
+      // We require retaining and horizontal operations to operate upon zero'd
+      // false lanes to ensure the conversion doesn't change the output.
+      if (retainsPreviousHalfElement(MI) || isHorizontalReduction(MI))
+        return false;
+      // Otherwise we need to evaluate this instruction later to see whether
+      // unknown false lanes will get masked away by their user(s).
+      FalseLanesUnknown.insert(&MI);
+    } else if (!isHorizontalReduction(MI))
+      FalseLanesZero.insert(&MI);
+  }
+
+  auto HasPredicatedUsers = [this](MachineInstr *MI, const MachineOperand &MO,
+                              SmallPtrSetImpl<MachineInstr *> &Predicated) {
+    SmallPtrSet<MachineInstr *, 2> Uses;
+    RDA.getGlobalUses(MI, MO.getReg(), Uses);
+    for (auto *Use : Uses) {
+      if (Use != MI && !Predicated.count(Use))
+        return false;
+    }
+    return true;
+  };
+
+  // Visit the unknowns in reverse so that we can start at the values being
+  // stored and then we can work towards the leaves, hopefully adding more
+  // instructions to Predicated. Successfully terminating the loop means that
+  // all the unknown values have to found to be masked by predicated user(s).
+  for (auto *MI : reverse(FalseLanesUnknown)) {
+    for (auto &MO : MI->operands()) {
+      if (!isRegInClass(MO, QPRs) || !MO.isDef())
+        continue;
+      if (!HasPredicatedUsers(MI, MO, Predicated)) {
+        LLVM_DEBUG(dbgs() << "ARM Loops: Found an unknown def of : "
+                          << TRI.getRegAsmName(MO.getReg()) << " at " << *MI);
+        return false;
+      }
+    }
+    // Any unknown false lanes have been masked away by the user(s).
+    Predicated.insert(MI);
+  }
+
   // Collect Q-regs that are live in the exit blocks. We don't collect scalars
   // because they won't be affected by lane predication.
-  const TargetRegisterClass *QPRs = TRI.getRegClass(ARM::MQPRRegClassID);
   SmallSet<Register, 2> LiveOuts;
-  SmallVector<MachineBasicBlock*, 2> ExitBlocks;
+  SmallVector<MachineBasicBlock *, 2> ExitBlocks;
   ML.getExitBlocks(ExitBlocks);
   for (auto *MBB : ExitBlocks)
     for (const MachineBasicBlock::RegisterMaskPair &RegMask : MBB->liveins())
@@ -521,8 +701,8 @@ bool LowOverheadLoop::ValidateLiveOuts() const {
         LiveOuts.insert(RegMask.PhysReg);
 
   // Collect the instructions in the loop body that define the live-out values.
-  SmallPtrSet<MachineInstr*, 2> LiveMIs;
-  MachineBasicBlock *MBB = ML.getHeader();
+  SmallPtrSet<MachineInstr *, 2> LiveMIs;
+  assert(ML.getNumBlocks() == 1 && "Expected single block loop!");
   for (auto Reg : LiveOuts)
     if (auto *MI = RDA.getLocalLiveOutMIDef(MBB, Reg))
       LiveMIs.insert(MI);
@@ -534,11 +714,9 @@ bool LowOverheadLoop::ValidateLiveOuts() const {
   // equivalent when we perform the predication transformation; so we know that
   // any VPT predicated instruction is predicated upon VCTP. Any live-out
   // instruction needs to be predicated, so check this here.
-  for (auto *MI : LiveMIs) {
-    int PIdx = llvm::findFirstVPTPredOperandIdx(*MI);
-    if (PIdx == -1 || MI->getOperand(PIdx+1).getReg() != ARM::VPR)
+  for (auto *MI : LiveMIs)
+    if (!isVectorPredicated(MI))
       return false;
-  }
 
   return true;
 }
@@ -1020,7 +1198,7 @@ void ARMLowOverheadLoops::ConvertVPTBlocks(LowOverheadLoop &LoLoop) {
       if (isVCTP(Divergent->MI)) {
         // The vctp will be removed, so the size of the vpt block needs to be
         // modified.
-        uint64_t Size = getARMVPTBlockMask(Block.size() - 1);
+        uint64_t Size = (uint64_t)getARMVPTBlockMask(Block.size() - 1);
         Block.getVPST()->getOperand(0).setImm(Size);
         LLVM_DEBUG(dbgs() << "ARM Loops: Modified VPT block mask.\n");
       } else if (Block.IsOnlyPredicatedOn(LoLoop.VCTP)) {
@@ -1049,7 +1227,7 @@ void ARMLowOverheadLoops::ConvertVPTBlocks(LowOverheadLoop &LoLoop) {
         MachineInstrBuilder MIB = BuildMI(*InsertAt->getParent(), InsertAt,
                                           InsertAt->getDebugLoc(),
                                           TII->get(ARM::MVE_VPST));
-        MIB.addImm(getARMVPTBlockMask(Size));
+        MIB.addImm((uint64_t)getARMVPTBlockMask(Size));
         LLVM_DEBUG(dbgs() << "ARM Loops: Removing VPST: " << *Block.getVPST());
         LLVM_DEBUG(dbgs() << "ARM Loops: Created VPST: " << *MIB);
         LoLoop.ToRemove.insert(Block.getVPST());

@@ -21,6 +21,8 @@
 #include "llvm/BinaryFormat/Dwarf.h"
 #include "llvm/BinaryFormat/ELF.h"
 #include "llvm/BinaryFormat/MachO.h"
+#include "llvm/CodeGen/MachineBasicBlock.h"
+#include "llvm/CodeGen/MachineFunction.h"
 #include "llvm/CodeGen/MachineModuleInfo.h"
 #include "llvm/CodeGen/MachineModuleInfoImpls.h"
 #include "llvm/IR/Comdat.h"
@@ -52,8 +54,8 @@
 #include "llvm/ProfileData/InstrProf.h"
 #include "llvm/Support/Casting.h"
 #include "llvm/Support/CodeGen.h"
-#include "llvm/Support/Format.h"
 #include "llvm/Support/ErrorHandling.h"
+#include "llvm/Support/Format.h"
 #include "llvm/Support/raw_ostream.h"
 #include "llvm/Target/TargetMachine.h"
 #include <cassert>
@@ -84,6 +86,15 @@ static void GetObjCImageInfo(Module &M, unsigned &Version, unsigned &Flags,
     } else if (Key == "Objective-C Image Info Section") {
       Section = cast<MDString>(MFE.Val)->getString();
     }
+    // Backend generates L_OBJC_IMAGE_INFO from Swift ABI version + major + minor +
+    // "Objective-C Garbage Collection".
+    else if (Key == "Swift ABI Version") {
+      Flags |= (mdconst::extract<ConstantInt>(MFE.Val)->getZExtValue()) << 8;
+    } else if (Key == "Swift Major Version") {
+      Flags |= (mdconst::extract<ConstantInt>(MFE.Val)->getZExtValue()) << 24;
+    } else if (Key == "Swift Minor Version") {
+      Flags |= (mdconst::extract<ConstantInt>(MFE.Val)->getZExtValue()) << 16;
+    }
   }
 }
 
@@ -97,6 +108,7 @@ void TargetLoweringObjectFileELF::Initialize(MCContext &Ctx,
   TM = &TgtM;
 
   CodeModel::Model CM = TgtM.getCodeModel();
+  InitializeELF(TgtM.Options.UseInitArray);
 
   switch (TgtM.getTargetTriple().getArch()) {
   case Triple::arm:
@@ -751,6 +763,46 @@ MCSection *TargetLoweringObjectFileELF::getSectionForConstant(
 
   assert(Kind.isReadOnlyWithRel() && "Unknown section kind");
   return DataRelROSection;
+}
+
+/// Returns a unique section for the given machine basic block.
+MCSection *TargetLoweringObjectFileELF::getSectionForMachineBasicBlock(
+    const Function &F, const MachineBasicBlock &MBB,
+    const TargetMachine &TM) const {
+  assert(MBB.isBeginSection() && "Basic block does not start a section!");
+  SmallString<128> Name;
+  Name = (static_cast<MCSectionELF *>(MBB.getParent()->getSection()))
+             ->getSectionName();
+  unsigned UniqueID = MCContext::GenericSectionID;
+
+  switch (MBB.getSectionID().Type) {
+    // Append suffixes to represent special cold and exception sections.
+  case MBBSectionID::SectionType::Exception:
+    Name += ".eh";
+    break;
+  case MBBSectionID::SectionType::Cold:
+    Name += ".unlikely";
+    break;
+  // For regular sections, either use a unique name, or a unique ID for the
+  // section.
+  default:
+    if (TM.getUniqueBBSectionNames()) {
+      Name += ".";
+      Name += MBB.getSymbol()->getName();
+    } else
+      UniqueID = NextUniqueID++;
+    break;
+  }
+
+  unsigned Flags = ELF::SHF_ALLOC | ELF::SHF_EXECINSTR;
+  std::string GroupName = "";
+  if (F.hasComdat()) {
+    Flags |= ELF::SHF_GROUP;
+    GroupName = F.getComdat()->getName().str();
+  }
+  return getContext().getELFSection(Name, ELF::SHT_PROGBITS, Flags,
+                                    0 /* Entry Size */, GroupName, UniqueID,
+                                    nullptr);
 }
 
 static MCSectionELF *getStaticStructorSection(MCContext &Ctx, bool UseInitArray,
@@ -1619,8 +1671,8 @@ static std::string scalarConstantToHexString(const Constant *C) {
     return APIntToHexString(CI->getValue());
   } else {
     unsigned NumElements;
-    if (isa<VectorType>(Ty))
-      NumElements = Ty->getVectorNumElements();
+    if (auto *VTy = dyn_cast<VectorType>(Ty))
+      NumElements = VTy->getNumElements();
     else
       NumElements = Ty->getArrayNumElements();
     std::string HexString;
@@ -1702,6 +1754,14 @@ MCSection *TargetLoweringObjectFileWasm::getExplicitSectionGlobal(
   }
 
   StringRef Name = GO->getSection();
+
+  // Certain data sections we treat as named custom sections rather than
+  // segments within the data section.
+  // This could be avoided if all data segements (the wasm sense) were
+  // represented as thier own sections (in the llvm sense).
+  // TODO(sbc): https://github.com/WebAssembly/tool-conventions/issues/138
+  if (Name == ".llvmcmd" || Name == ".llvmbc")
+    Kind = SectionKind::getMetadata();
 
   StringRef Group = "";
   if (const Comdat *C = getWasmComdat(GO)) {
@@ -1948,7 +2008,11 @@ XCOFF::StorageClass TargetLoweringObjectFileXCOFF::getStorageClassForGlobal(
   case GlobalValue::CommonLinkage:
     return XCOFF::C_EXT;
   case GlobalValue::ExternalWeakLinkage:
+  case GlobalValue::LinkOnceODRLinkage:
     return XCOFF::C_WEAKEXT;
+  case GlobalValue::AppendingLinkage:
+    report_fatal_error(
+        "There is no mapping that implements AppendingLinkage for XCOFF.");
   default:
     report_fatal_error(
         "Unhandled linkage when mapping linkage to StorageClass.");
@@ -1956,9 +2020,11 @@ XCOFF::StorageClass TargetLoweringObjectFileXCOFF::getStorageClassForGlobal(
 }
 
 MCSection *TargetLoweringObjectFileXCOFF::getSectionForFunctionDescriptor(
-    const MCSymbol *FuncSym) const {
-  return getContext().getXCOFFSection(FuncSym->getName(), XCOFF::XMC_DS,
-                                      XCOFF::XTY_SD, XCOFF::C_HIDEXT,
+    const Function *F, const TargetMachine &TM) const {
+  SmallString<128> NameStr;
+  getNameWithPrefix(NameStr, F, TM);
+  return getContext().getXCOFFSection(NameStr, XCOFF::XMC_DS, XCOFF::XTY_SD,
+                                      getStorageClassForGlobal(F),
                                       SectionKind::getData());
 }
 

@@ -109,11 +109,11 @@ struct SymbolAssignment : BaseCommand {
   std::string commandString;
 
   // Address of this assignment command.
-  unsigned addr;
+  uint64_t addr;
 
   // Size of this assignment command. This is usually 0, but if
   // you move '.' this may be greater than 0.
-  unsigned size;
+  uint64_t size;
 };
 
 // Linker scripts allow additional constraints to be put on output sections.
@@ -126,14 +126,14 @@ enum class ConstraintKind { NoConstraint, ReadOnly, ReadWrite };
 // target memory. Instances of the struct are created by parsing the
 // MEMORY command.
 struct MemoryRegion {
-  MemoryRegion(StringRef name, uint64_t origin, uint64_t length, uint32_t flags,
+  MemoryRegion(StringRef name, Expr origin, Expr length, uint32_t flags,
                uint32_t negFlags)
       : name(std::string(name)), origin(origin), length(length), flags(flags),
         negFlags(negFlags) {}
 
   std::string name;
-  uint64_t origin;
-  uint64_t length;
+  Expr origin;
+  Expr length;
   uint32_t flags;
   uint32_t negFlags;
   uint64_t curPos = 0;
@@ -324,10 +324,6 @@ public:
 
   // Sections that will be warned/errored by --orphan-handling.
   std::vector<const InputSectionBase *> orphanSections;
-
-  // Sections whose addresses are not equal to their addrExpr values.
-  std::vector<std::pair<const OutputSection *, uint64_t>>
-      changedSectionAddresses;
 };
 
 extern LinkerScript *script;

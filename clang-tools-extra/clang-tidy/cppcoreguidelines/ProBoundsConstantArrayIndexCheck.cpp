@@ -21,8 +21,9 @@ namespace cppcoreguidelines {
 ProBoundsConstantArrayIndexCheck::ProBoundsConstantArrayIndexCheck(
     StringRef Name, ClangTidyContext *Context)
     : ClangTidyCheck(Name, Context), GslHeader(Options.get("GslHeader", "")),
-      IncludeStyle(utils::IncludeSorter::parseIncludeStyle(
-          Options.getLocalOrGlobal("IncludeStyle", "llvm"))) {}
+      IncludeStyle(Options.getLocalOrGlobal("IncludeStyle",
+                                            utils::IncludeSorter::getMapping(),
+                                            utils::IncludeSorter::IS_LLVM)) {}
 
 void ProBoundsConstantArrayIndexCheck::storeOptions(
     ClangTidyOptions::OptionMap &Opts) {
@@ -86,13 +87,10 @@ void ProBoundsConstantArrayIndexCheck::check(
                   SourceRange(BaseRange.getEnd().getLocWithOffset(1),
                               IndexRange.getBegin().getLocWithOffset(-1)),
                   ", ")
-           << FixItHint::CreateReplacement(Matched->getEndLoc(), ")");
-
-      Optional<FixItHint> Insertion = Inserter->CreateIncludeInsertion(
-          Result.SourceManager->getMainFileID(), GslHeader,
-          /*IsAngled=*/false);
-      if (Insertion)
-        Diag << Insertion.getValue();
+           << FixItHint::CreateReplacement(Matched->getEndLoc(), ")")
+           << Inserter->CreateIncludeInsertion(
+                  Result.SourceManager->getMainFileID(), GslHeader,
+                  /*IsAngled=*/false);
     }
     return;
   }

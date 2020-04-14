@@ -208,6 +208,14 @@ bool Attribute::doesAttrKindHaveArgument(Attribute::AttrKind AttrKind) {
          AttrKind == Attribute::DereferenceableOrNull;
 }
 
+bool Attribute::isExistingAttribute(StringRef Name) {
+  return StringSwitch<bool>(Name)
+#define GET_ATTR_NAMES
+#define ATTRIBUTE_ALL(ENUM_NAME, DISPLAY_NAME) .Case(#DISPLAY_NAME, true)
+#include "llvm/IR/Attributes.inc"
+      .Default(false);
+}
+
 //===----------------------------------------------------------------------===//
 // Attribute Accessor Methods
 //===----------------------------------------------------------------------===//
@@ -1011,11 +1019,12 @@ AttributeList::get(LLVMContext &C,
   if (Attrs.empty())
     return {};
 
-  assert(std::is_sorted(Attrs.begin(), Attrs.end(),
-                        [](const std::pair<unsigned, Attribute> &LHS,
-                           const std::pair<unsigned, Attribute> &RHS) {
-                          return LHS.first < RHS.first;
-                        }) && "Misordered Attributes list!");
+  assert(llvm::is_sorted(Attrs,
+                         [](const std::pair<unsigned, Attribute> &LHS,
+                            const std::pair<unsigned, Attribute> &RHS) {
+                           return LHS.first < RHS.first;
+                         }) &&
+         "Misordered Attributes list!");
   assert(llvm::none_of(Attrs,
                        [](const std::pair<unsigned, Attribute> &Pair) {
                          return Pair.second.hasAttribute(Attribute::None);
@@ -1047,11 +1056,11 @@ AttributeList::get(LLVMContext &C,
   if (Attrs.empty())
     return {};
 
-  assert(std::is_sorted(Attrs.begin(), Attrs.end(),
-                        [](const std::pair<unsigned, AttributeSet> &LHS,
-                           const std::pair<unsigned, AttributeSet> &RHS) {
-                          return LHS.first < RHS.first;
-                        }) &&
+  assert(llvm::is_sorted(Attrs,
+                         [](const std::pair<unsigned, AttributeSet> &LHS,
+                            const std::pair<unsigned, AttributeSet> &RHS) {
+                           return LHS.first < RHS.first;
+                         }) &&
          "Misordered Attributes list!");
   assert(llvm::none_of(Attrs,
                        [](const std::pair<unsigned, AttributeSet> &Pair) {
@@ -1220,7 +1229,7 @@ AttributeList AttributeList::addAttributes(LLVMContext &C, unsigned Index,
 AttributeList AttributeList::addParamAttribute(LLVMContext &C,
                                                ArrayRef<unsigned> ArgNos,
                                                Attribute A) const {
-  assert(std::is_sorted(ArgNos.begin(), ArgNos.end()));
+  assert(llvm::is_sorted(ArgNos));
 
   SmallVector<AttributeSet, 4> AttrSets(this->begin(), this->end());
   unsigned MaxIndex = attrIdxToArrayIdx(ArgNos.back() + FirstArgIndex);

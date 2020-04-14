@@ -108,7 +108,7 @@ To add this interface we just need to include the definition into our operation
 specification file (`Ops.td`):
 
 ```tablegen
-include "mlir/Analysis/CallInterfaces.td"
+include "mlir/Interfaces/CallInterfaces.td"
 ```
 
 and add it to the traits list of `GenericCallOp`:
@@ -318,7 +318,8 @@ Implementing such a pass is done by creating a class inheriting from
 `mlir::FunctionPass` and overriding the `runOnFunction()` method.
 
 ```c++
-class ShapeInferencePass : public mlir::FunctionPass<ShapeInferencePass> {
+class ShapeInferencePass
+    : public mlir::PassWrapper<ShapeInferencePass, FunctionPass> {
   void runOnFunction() override {
     FuncOp function = getFunction();
     ...

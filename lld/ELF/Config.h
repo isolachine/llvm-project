@@ -90,6 +90,7 @@ struct Configuration {
   uint32_t andFeatures = 0;
   llvm::CachePruningPolicy thinLTOCachePolicy;
   llvm::StringMap<uint64_t> sectionStartMap;
+  llvm::StringRef bfdname;
   llvm::StringRef chroot;
   llvm::StringRef dynamicLinker;
   llvm::StringRef dwoDir;
@@ -113,6 +114,7 @@ struct Configuration {
   llvm::StringRef sysroot;
   llvm::StringRef thinLTOCacheDir;
   llvm::StringRef thinLTOIndexOnlyArg;
+  llvm::StringRef ltoBasicBlockSections;
   std::pair<llvm::StringRef, llvm::StringRef> thinLTOObjectSuffixReplace;
   std::pair<llvm::StringRef, llvm::StringRef> thinLTOPrefixReplace;
   std::string rpath;
@@ -164,6 +166,7 @@ struct Configuration {
   bool ltoCSProfileGenerate;
   bool ltoDebugPassManager;
   bool ltoNewPassManager;
+  bool ltoUniqueBBSectionNames;
   bool ltoWholeProgramVisibility;
   bool mergeArmExidx;
   bool mipsN32Abi = false;
@@ -174,6 +177,7 @@ struct Configuration {
   bool nostdlib;
   bool oFormatBinary;
   bool omagic;
+  bool optimizeBBJumps;
   bool optRemarksWithHotness;
   bool picThunk;
   bool pie;
@@ -194,6 +198,7 @@ struct Configuration {
   bool timeTraceEnabled;
   bool tocOptimize;
   bool undefinedVersion;
+  bool unique;
   bool useAndroidRelrTags = false;
   bool warnBackrefs;
   bool warnCommon;
@@ -244,7 +249,7 @@ struct Configuration {
   unsigned ltoPartitions;
   unsigned ltoo;
   unsigned optimize;
-  unsigned thinLTOJobs;
+  StringRef thinLTOJobs;
   unsigned timeTraceGranularity;
   int32_t splitStackAdjustSize;
 

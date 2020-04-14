@@ -102,7 +102,8 @@ static ParseResult parseCmpOp(OpAsmParser &parser, OperationState &result) {
     return parser.emitError(trailingTypeLoc, "expected LLVM IR dialect type");
   if (argType.getUnderlyingType()->isVectorTy())
     resultType = LLVMType::getVectorTy(
-        resultType, argType.getUnderlyingType()->getVectorNumElements());
+        resultType, llvm::cast<llvm::VectorType>(argType.getUnderlyingType())
+                        ->getNumElements());
 
   result.addTypes({resultType});
   return success();
@@ -152,6 +153,28 @@ static ParseResult parseAllocaOp(OpAsmParser &parser, OperationState &result) {
   result.addTypes({funcType.getResult(0)});
   return success();
 }
+
+//===----------------------------------------------------------------------===//
+// LLVM::BrOp
+//===----------------------------------------------------------------------===//
+
+Optional<OperandRange> BrOp::getSuccessorOperands(unsigned index) {
+  assert(index == 0 && "invalid successor index");
+  return getOperands();
+}
+
+bool BrOp::canEraseSuccessorOperand() { return true; }
+
+//===----------------------------------------------------------------------===//
+// LLVM::CondBrOp
+//===----------------------------------------------------------------------===//
+
+Optional<OperandRange> CondBrOp::getSuccessorOperands(unsigned index) {
+  assert(index < getNumSuccessors() && "invalid successor index");
+  return index == 0 ? trueDestOperands() : falseDestOperands();
+}
+
+bool CondBrOp::canEraseSuccessorOperand() { return true; }
 
 //===----------------------------------------------------------------------===//
 // Printing/parsing for LLVM::LoadOp.
@@ -228,9 +251,16 @@ static ParseResult parseStoreOp(OpAsmParser &parser, OperationState &result) {
   return success();
 }
 
-///===----------------------------------------------------------------------===//
-/// Verifying/Printing/Parsing for LLVM::InvokeOp.
-///===----------------------------------------------------------------------===//
+///===---------------------------------------------------------------------===//
+/// LLVM::InvokeOp
+///===---------------------------------------------------------------------===//
+
+Optional<OperandRange> InvokeOp::getSuccessorOperands(unsigned index) {
+  assert(index < getNumSuccessors() && "invalid successor index");
+  return index == 0 ? normalDestOperands() : unwindDestOperands();
+}
+
+bool InvokeOp::canEraseSuccessorOperand() { return true; }
 
 static LogicalResult verify(InvokeOp op) {
   if (op.getNumResults() > 1)
@@ -249,7 +279,7 @@ static LogicalResult verify(InvokeOp op) {
   return success();
 }
 
-static void printInvokeOp(OpAsmPrinter &p, InvokeOp &op) {
+static void printInvokeOp(OpAsmPrinter &p, InvokeOp op) {
   auto callee = op.callee();
   bool isDirect = callee.hasValue();
 
@@ -263,17 +293,16 @@ static void printInvokeOp(OpAsmPrinter &p, InvokeOp &op) {
 
   p << '(' << op.getOperands().drop_front(isDirect ? 0 : 1) << ')';
   p << " to ";
-  p.printSuccessorAndUseList(op.getOperation(), 0);
+  p.printSuccessorAndUseList(op.normalDest(), op.normalDestOperands());
   p << " unwind ";
-  p.printSuccessorAndUseList(op.getOperation(), 1);
+  p.printSuccessorAndUseList(op.unwindDest(), op.unwindDestOperands());
 
-  p.printOptionalAttrDict(op.getAttrs(), {"callee"});
-
-  SmallVector<Type, 8> argTypes(
-      llvm::drop_begin(op.getOperandTypes(), isDirect ? 0 : 1));
-
-  p << " : "
-    << FunctionType::get(argTypes, op.getResultTypes(), op.getContext());
+  p.printOptionalAttrDict(op.getAttrs(),
+                          {InvokeOp::getOperandSegmentSizeAttr(), "callee"});
+  p << " : ";
+  p.printFunctionalType(
+      llvm::drop_begin(op.getOperandTypes(), isDirect ? 0 : 1),
+      op.getResultTypes());
 }
 
 /// <operation> ::= `llvm.invoke` (function-id | ssa-use) `(` ssa-use-list `)`
@@ -287,6 +316,7 @@ static ParseResult parseInvokeOp(OpAsmParser &parser, OperationState &result) {
   llvm::SMLoc trailingTypeLoc;
   Block *normalDest, *unwindDest;
   SmallVector<Value, 4> normalOperands, unwindOperands;
+  Builder &builder = parser.getBuilder();
 
   // Parse an operand list that will, in practice, contain 0 or 1 operand.  In
   // case of an indirect call, there will be 1 operand before `(`.  In case of a
@@ -322,7 +352,6 @@ static ParseResult parseInvokeOp(OpAsmParser &parser, OperationState &result) {
       return parser.emitError(trailingTypeLoc,
                               "expected function with 0 or 1 result");
 
-    Builder &builder = parser.getBuilder();
     auto *llvmDialect =
         builder.getContext()->getRegisteredDialect<LLVM::LLVMDialect>();
     LLVM::LLVMType llvmResultType;
@@ -361,8 +390,15 @@ static ParseResult parseInvokeOp(OpAsmParser &parser, OperationState &result) {
 
     result.addTypes(llvmResultType);
   }
-  result.addSuccessor(normalDest, normalOperands);
-  result.addSuccessor(unwindDest, unwindOperands);
+  result.addSuccessors({normalDest, unwindDest});
+  result.addOperands(normalOperands);
+  result.addOperands(unwindOperands);
+
+  result.addAttribute(
+      InvokeOp::getOperandSegmentSizeAttr(),
+      builder.getI32VectorAttr({static_cast<int32_t>(operands.size()),
+                                static_cast<int32_t>(normalOperands.size()),
+                                static_cast<int32_t>(unwindOperands.size())}));
   return success();
 }
 
@@ -372,6 +408,11 @@ static ParseResult parseInvokeOp(OpAsmParser &parser, OperationState &result) {
 
 static LogicalResult verify(LandingpadOp op) {
   Value value;
+  if (LLVMFuncOp func = op.getParentOfType<LLVMFuncOp>()) {
+    if (!func.personality().hasValue())
+      return op.emitError(
+          "llvm.landingpad needs to be in a function with a personality");
+  }
 
   if (!op.cleanup() && op.getOperands().empty())
     return op.emitError("landingpad instruction expects at least one clause or "
@@ -1533,6 +1574,47 @@ static LogicalResult verify(AtomicCmpXchgOp op) {
 }
 
 //===----------------------------------------------------------------------===//
+// Printer, parser and verifier for LLVM::FenceOp.
+//===----------------------------------------------------------------------===//
+
+// <operation> ::= `llvm.fence` (`syncscope(`strAttr`)`)? keyword
+// attribute-dict?
+static ParseResult parseFenceOp(OpAsmParser &parser, OperationState &result) {
+  StringAttr sScope;
+  StringRef syncscopeKeyword = "syncscope";
+  if (!failed(parser.parseOptionalKeyword(syncscopeKeyword))) {
+    if (parser.parseLParen() ||
+        parser.parseAttribute(sScope, syncscopeKeyword, result.attributes) ||
+        parser.parseRParen())
+      return failure();
+  } else {
+    result.addAttribute(syncscopeKeyword,
+                        parser.getBuilder().getStringAttr(""));
+  }
+  if (parseAtomicOrdering(parser, result, "ordering") ||
+      parser.parseOptionalAttrDict(result.attributes))
+    return failure();
+  return success();
+}
+
+static void printFenceOp(OpAsmPrinter &p, FenceOp &op) {
+  StringRef syncscopeKeyword = "syncscope";
+  p << op.getOperationName() << ' ';
+  if (!op.getAttr(syncscopeKeyword).cast<StringAttr>().getValue().empty())
+    p << "syncscope(" << op.getAttr(syncscopeKeyword) << ") ";
+  p << stringifyAtomicOrdering(op.ordering());
+}
+
+static LogicalResult verify(FenceOp &op) {
+  if (op.ordering() == AtomicOrdering::not_atomic ||
+      op.ordering() == AtomicOrdering::unordered ||
+      op.ordering() == AtomicOrdering::monotonic)
+    return op.emitOpError("can be given only acquire, release, acq_rel, "
+                          "and seq_cst orderings");
+  return success();
+}
+
+//===----------------------------------------------------------------------===//
 // LLVMDialect initialization, type parsing, and registration.
 //===----------------------------------------------------------------------===//
 
@@ -1691,7 +1773,12 @@ bool LLVMType::isArrayTy() { return getUnderlyingType()->isArrayTy(); }
 
 /// Vector type utilities.
 LLVMType LLVMType::getVectorElementType() {
-  return get(getContext(), getUnderlyingType()->getVectorElementType());
+  return get(
+      getContext(),
+      llvm::cast<llvm::VectorType>(getUnderlyingType())->getElementType());
+}
+unsigned LLVMType::getVectorNumElements() {
+  return llvm::cast<llvm::VectorType>(getUnderlyingType())->getNumElements();
 }
 bool LLVMType::isVectorTy() { return getUnderlyingType()->isVectorTy(); }
 

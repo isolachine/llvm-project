@@ -143,8 +143,8 @@ def X86MFence : SDNode<"X86ISD::MFENCE", SDT_X86MEMBARRIER,
 
 def X86bsf     : SDNode<"X86ISD::BSF",      SDTUnaryArithWithFlags>;
 def X86bsr     : SDNode<"X86ISD::BSR",      SDTUnaryArithWithFlags>;
-def X86shld    : SDNode<"X86ISD::SHLD",     SDTIntShiftDOp>;
-def X86shrd    : SDNode<"X86ISD::SHRD",     SDTIntShiftDOp>;
+def X86fshl    : SDNode<"X86ISD::FSHL",     SDTIntShiftDOp>;
+def X86fshr    : SDNode<"X86ISD::FSHR",     SDTIntShiftDOp>;
 
 def X86cmp     : SDNode<"X86ISD::CMP" ,     SDTX86CmpTest>;
 def X86fcmp    : SDNode<"X86ISD::FCMP",     SDTX86FCmp>;
@@ -955,18 +955,20 @@ def HasCmpxchg8b : Predicate<"Subtarget->hasCmpxchg8b()">;
 def HasCmpxchg16b: Predicate<"Subtarget->hasCmpxchg16b()">;
 def HasPCONFIG   : Predicate<"Subtarget->hasPCONFIG()">;
 def HasENQCMD    : Predicate<"Subtarget->hasENQCMD()">;
+def HasSERIALIZE : Predicate<"Subtarget->hasSERIALIZE()">;
+def HasTSXLDTRK  : Predicate<"Subtarget->hasTSXLDTRK()">;
 def Not64BitMode : Predicate<"!Subtarget->is64Bit()">,
-                             AssemblerPredicate<"!Mode64Bit", "Not 64-bit mode">;
+                             AssemblerPredicate<(all_of (not Mode64Bit)), "Not 64-bit mode">;
 def In64BitMode  : Predicate<"Subtarget->is64Bit()">,
-                             AssemblerPredicate<"Mode64Bit", "64-bit mode">;
+                             AssemblerPredicate<(all_of Mode64Bit), "64-bit mode">;
 def IsLP64  : Predicate<"Subtarget->isTarget64BitLP64()">;
 def NotLP64 : Predicate<"!Subtarget->isTarget64BitLP64()">;
 def In16BitMode  : Predicate<"Subtarget->is16Bit()">,
-                             AssemblerPredicate<"Mode16Bit", "16-bit mode">;
+                             AssemblerPredicate<(all_of Mode16Bit), "16-bit mode">;
 def Not16BitMode : Predicate<"!Subtarget->is16Bit()">,
-                             AssemblerPredicate<"!Mode16Bit", "Not 16-bit mode">;
+                             AssemblerPredicate<(all_of (not Mode16Bit)), "Not 16-bit mode">;
 def In32BitMode  : Predicate<"Subtarget->is32Bit()">,
-                             AssemblerPredicate<"Mode32Bit", "32-bit mode">;
+                             AssemblerPredicate<(all_of Mode32Bit), "32-bit mode">;
 def IsWin64      : Predicate<"Subtarget->isTargetWin64()">;
 def NotWin64     : Predicate<"!Subtarget->isTargetWin64()">;
 def NotWin64WithoutFP : Predicate<"!Subtarget->isTargetWin64() ||"
@@ -1003,8 +1005,8 @@ def HasFastLZCNT : Predicate<"Subtarget->hasFastLZCNT()">;
 def HasFastSHLDRotate : Predicate<"Subtarget->hasFastSHLDRotate()">;
 def HasERMSB : Predicate<"Subtarget->hasERMSB()">;
 def HasMFence    : Predicate<"Subtarget->hasMFence()">;
-def UseRetpolineIndirectCalls : Predicate<"Subtarget->useRetpolineIndirectCalls()">;
-def NotUseRetpolineIndirectCalls : Predicate<"!Subtarget->useRetpolineIndirectCalls()">;
+def UseIndirectThunkCalls : Predicate<"Subtarget->useIndirectThunkCalls()">;
+def NotUseIndirectThunkCalls : Predicate<"!Subtarget->useIndirectThunkCalls()">;
 
 //===----------------------------------------------------------------------===//
 // X86 Instruction Format Definitions.
@@ -2860,6 +2862,23 @@ let SchedRW = [WriteLoad] in {
 
 def : InstAlias<"clzero\t{%eax|eax}", (CLZERO32r)>, Requires<[Not64BitMode]>;
 def : InstAlias<"clzero\t{%rax|rax}", (CLZERO64r)>, Requires<[In64BitMode]>;
+
+//===----------------------------------------------------------------------===//
+// SERIALIZE Instruction
+//
+def SERIALIZE : I<0x01, MRM_E8, (outs), (ins), "serialize",
+                  [(int_x86_serialize)]>, PS,
+                  Requires<[HasSERIALIZE]>;
+
+//===----------------------------------------------------------------------===//
+// TSXLDTRK - TSX Suspend Load Address Tracking
+//
+let Predicates = [HasTSXLDTRK] in {
+  def XSUSLDTRK : I<0x01, MRM_E8, (outs), (ins), "xsusldtrk",
+                    [(int_x86_xsusldtrk)]>, XD;
+  def XRESLDTRK : I<0x01, MRM_E9, (outs), (ins), "xresldtrk",
+                    [(int_x86_xresldtrk)]>, XD;
+}
 
 //===----------------------------------------------------------------------===//
 // Pattern fragments to auto generate TBM instructions.

@@ -99,6 +99,7 @@ def FloatConversion :
   DiagGroup<"float-conversion", [FloatOverflowConversion,
                                  FloatZeroConversion]>;
 
+def FrameAddress : DiagGroup<"frame-address">;
 def DoublePromotion : DiagGroup<"double-promotion">;
 def EnumTooLarge : DiagGroup<"enum-too-large">;
 def UnsupportedNan : DiagGroup<"unsupported-nan">;
@@ -838,9 +839,13 @@ def IncompatibleExceptionSpec : DiagGroup<"incompatible-exception-spec">;
 def IntToVoidPointerCast : DiagGroup<"int-to-void-pointer-cast">;
 def IntToPointerCast : DiagGroup<"int-to-pointer-cast",
                                  [IntToVoidPointerCast]>;
-def VoidPointerToIntCast : DiagGroup<"void-pointer-to-int-cast">;
+def VoidPointerToEnumCast : DiagGroup<"void-pointer-to-enum-cast">;
+def VoidPointerToIntCast : DiagGroup<"void-pointer-to-int-cast",
+                                     [VoidPointerToEnumCast]>;
+def PointerToEnumCast : DiagGroup<"pointer-to-enum-cast",
+                                  [VoidPointerToEnumCast]>;
 def PointerToIntCast : DiagGroup<"pointer-to-int-cast",
-                                 [VoidPointerToIntCast]>;
+                                 [PointerToEnumCast, VoidPointerToIntCast]>;
 
 def Move : DiagGroup<"move", [
     PessimizingMove,
@@ -868,6 +873,7 @@ def Most : DiagGroup<"most", [
     DeleteNonVirtualDtor,
     Format,
     ForLoopAnalysis,
+    FrameAddress,
     Implicit,
     InfiniteRecursion,
     IntInBoolContext,
@@ -979,6 +985,9 @@ def C11 : DiagGroup<"c11-extensions">;
 // A warning group for warnings about using C99 features as extensions.
 def C99 : DiagGroup<"c99-extensions", [C99Designator]>;
 
+// A warning group for warnings about using C2x features as extensions.
+def C2x : DiagGroup<"c2x-extensions">;
+
 // A warning group for warnings about GCC extensions.
 def GNU : DiagGroup<"gnu", [GNUAlignofExpression, GNUAnonymousStruct,
                             GNUAutoType,
@@ -1084,9 +1093,8 @@ def ObjCSignedCharBool : DiagGroup<"objc-signed-char-bool",
 
 // Inline ASM warnings.
 def ASMOperandWidths : DiagGroup<"asm-operand-widths">;
-def ASMIgnoredQualifier : DiagGroup<"asm-ignored-qualifier">;
 def ASM : DiagGroup<"asm", [
-    ASMOperandWidths, ASMIgnoredQualifier
+    ASMOperandWidths
   ]>;
 
 // OpenMP warnings.
@@ -1149,8 +1157,8 @@ def UnknownArgument : DiagGroup<"unknown-argument">;
 // compiling OpenCL C/C++ but which is not compatible with the SPIR spec.
 def SpirCompat : DiagGroup<"spir-compat">;
 
-// Warning for the experimental-isel options.
-def ExperimentalISel : DiagGroup<"experimental-isel">;
+// Warning for the GlobalISel options.
+def GlobalISel : DiagGroup<"global-isel">;
 
 // A warning group specifically for warnings related to function
 // multiversioning.
@@ -1171,7 +1179,7 @@ The warning is issued if the number of pre-processor tokens exceeds
 the token limit, which can be set in three ways:
 
 1. As a limit at a specific point in a file, using the ``clang max_tokens_here``
-  pragma:
+   pragma:
 
    .. code-block: c++
       #pragma clang max_tokens_here 1234

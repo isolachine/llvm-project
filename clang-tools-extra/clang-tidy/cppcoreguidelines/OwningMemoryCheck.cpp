@@ -91,8 +91,7 @@ void OwningMemoryCheck::registerMatchers(MatchFinder *Finder) {
 
   // Matching assignment to owners, with the rhs not being an owner nor creating
   // one.
-  Finder->addMatcher(binaryOperator(matchers::isAssignmentOperator(),
-                                    hasLHS(IsOwnerType),
+  Finder->addMatcher(binaryOperator(isAssignmentOperator(), hasLHS(IsOwnerType),
                                     hasRHS(unless(ConsideredOwner)))
                          .bind("owner_assignment"),
                      this);
@@ -119,7 +118,7 @@ void OwningMemoryCheck::registerMatchers(MatchFinder *Finder) {
 
   // Matching on assignment operations where the RHS is a newly created owner,
   // but the LHS is not an owner.
-  Finder->addMatcher(binaryOperator(matchers::isAssignmentOperator(),
+  Finder->addMatcher(binaryOperator(isAssignmentOperator(),
                                     hasLHS(unless(IsOwnerType)),
                                     hasRHS(CreatesOwner))
                          .bind("bad_owner_creation_assignment"),
@@ -216,7 +215,7 @@ bool OwningMemoryCheck::handleLegacyConsumers(const BoundNodes &Nodes) {
   // Result of matching for legacy consumer-functions like `::free()`.
   const auto *LegacyConsumer = Nodes.getNodeAs<CallExpr>("legacy_consumer");
 
-  // FIXME: `freopen` should be handled seperately because it takes the filename
+  // FIXME: `freopen` should be handled separately because it takes the filename
   // as a pointer, which should not be an owner. The argument that is an owner
   // is known and the false positive coming from the filename can be avoided.
   if (LegacyConsumer) {
