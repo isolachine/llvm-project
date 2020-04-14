@@ -1,4 +1,4 @@
-; ModuleID = 'test.ll'
+; ModuleID = '<stdin>'
 source_filename = "test.c"
 target datalayout = "e-m:o-p270:32:32-p271:32:32-p272:64:64-i64:64-f80:128-n8:16:32:64-S128"
 target triple = "x86_64-apple-macosx10.15.0"
@@ -46,4 +46,4 @@ attributes #0 = { noinline nounwind ssp uwtable "correctly-rounded-divide-sqrt-f
 
 !0 = !{i32 1, !"wchar_size", i32 4}
 !1 = !{i32 7, !"PIC Level", i32 2}
-!2 = !{!"clang version 11.0.0 (https://github.com/llvm/llvm-project.git e91e1df6ab74006e96b0cca94192e935542705a4)"}
+!2 = !{!"clang version 11.0.0 (https://github.com/llvm/llvm-project.git 4a303163083601f03f15edffe74651655ea30347)"}
