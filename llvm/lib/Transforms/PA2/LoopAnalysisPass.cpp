@@ -1,165 +1,147 @@
 
+#include "llvm/Analysis/LoopPass.h"
 #include "llvm/IR/CFG.h"
 #include "llvm/IR/Function.h"
 #include "llvm/IR/InstVisitor.h"
 #include "llvm/Pass.h"
 #include "llvm/Support/raw_ostream.h"
 #include <set>
+#include <vector>
 
 #include <iostream>
 
 using namespace llvm;
 
 namespace {
-class LoopAnalysis : public FunctionPass {
+
+class LoopAnalysisInfo {
 private:
-  DenseMap<Instruction *, DenseSet<StringRef>> liveIn;
-  DenseMap<Instruction *, DenseSet<StringRef>> liveOut;
-  DenseMap<Instruction *, DenseSet<StringRef>> UEVar;
-  DenseMap<Instruction *, DenseSet<StringRef>> VarKill;
-  DenseMap<Instruction *, DenseSet<Instruction *>> SuccInst;
-  DenseMap<Instruction *, DenseSet<Instruction *>> PredInst;
+public:
+  StringRef func;
+  unsigned int id;
+  unsigned int depth;
+  unsigned int bbCount;
+  unsigned int instCount;
+  unsigned int atomicsCount;
+  unsigned int branchCount;
+  bool hasSubLoops;
+
+  LoopAnalysisInfo();
+  ~LoopAnalysisInfo();
+};
+
+LoopAnalysisInfo::LoopAnalysisInfo() {
+  bbCount = 0;
+  instCount = 0;
+  atomicsCount = 0;
+  branchCount = 0;
+}
+
+LoopAnalysisInfo::~LoopAnalysisInfo() {}
+
+class LoopAnalysisPass : public FunctionPass {
+private:
+  std::vector<LoopAnalysisInfo *> infoVec;
+  std::set<BasicBlock *> countedBB;
+  std::set<BranchInst *> countedBrInst;
+  unsigned int loopCounter;
 
 public:
   static char ID;
-  LoopAnalysis() : FunctionPass(ID) {}
-  ~LoopAnalysis() {}
+  LoopAnalysisPass() : FunctionPass(ID) {}
+  ~LoopAnalysisPass() {}
 
   void getAnalysisUsage(AnalysisUsage &AU) const override {
+    AU.addRequired<LoopInfoWrapperPass>();
     AU.setPreservesAll();
   }
 
-  bool doInitialization(Module &M) override { return false; }
+  bool doInitialization(Module &M) override {
+    loopCounter = 0;
+    return false;
+  }
 
-  bool runOnFunction(Function &F) override {
-    std::vector<Instruction *> Worklist;
-    for (BasicBlock &BB : F) {
-      for (Instruction &I : BB) {
-        // compute the UEVar(I) and VarKill(I) for each instruction
-        User::op_iterator OI, OE;
-        for (OI = I.op_begin(), OE = I.op_end(); OI != OE; OI++) {
-          Value *val = *OI;
-          if (isa<Instruction>(val) || isa<Argument>(val)) {
-            UEVar[&I].insert(val->getName());
-          }
-        }
-        VarKill[&I].insert(I.getName());
-
-        // generate an instruction level CFG,
-        // i.e., treat each instruction as a basic block
-        if (BranchInst *BrI = dyn_cast<BranchInst>(&I)) {
-          for (BasicBlock *SBB : BrI->successors()) {
-            Instruction &I_first = SBB->front();
-            if (isa<PHINode>(I_first)) {
-              for (BasicBlock::iterator BI = SBB->begin(); BI != SBB->end();
-                   BI++) {
-                if (!isa<PHINode>(BI)) {
-                  break;
-                }
-                SuccInst[&I].insert(&*BI);
-              }
-            } else {
-              SuccInst[&I].insert(&I_first);
-            }
-          }
-        } else if (PHINode *PI = dyn_cast<PHINode>(&I)) {
-          for (Instruction &nonPI : BB) {
-            if (!isa<PHINode>(nonPI)) {
-              SuccInst[&I].insert(&nonPI);
-              break;
-            }
-          }
-        } else {
-          if (I.getNextNode())
-            SuccInst[&I].insert(I.getNextNode());
-        }
-        Worklist.push_back(&I);
-      }
-    }
-
-    // build the backwards version of the instruction level CFG
-    for (DenseMap<Instruction *, DenseSet<Instruction *>>::iterator iter =
-             SuccInst.begin();
-         iter != SuccInst.end(); iter++) {
-      for (Instruction *I : iter->second) {
-        PredInst[I].insert(iter->first);
-      }
-    }
-
-    while (!Worklist.empty()) {
-      Instruction *I = Worklist.back();
-      Worklist.pop_back();
-      liveOut[I] = DenseSet<StringRef>();
-
-      DenseSet<StringRef> omitSet;
-      for (Instruction *SI : SuccInst[I]) {
-        liveOut[I] = setUnion(liveOut[I], liveIn[SI]);
-        if (!isa<PHINode>(*SI)) {
-        } else {
-          omitSet.insert(SI->getName());
-          PHINode *PHII = dyn_cast<PHINode>(SI);
-          unsigned int value_count = PHII->getNumIncomingValues();
-          for (unsigned int i = 0; i < value_count; i++) {
-            if (PHII->getIncomingBlock(i) != I->getParent()) {
-              omitSet.insert(PHII->getIncomingValue(i)->getName());
-            }
-          }
-        }
-      }
-      liveOut[I] = setDiff(liveOut[I], omitSet);
-      DenseSet<StringRef> tmpLiveIn = liveIn[I];
-      liveIn[I] = setUnion(setDiff(liveOut[I], VarKill[I]), UEVar[I]);
-      if (setDiff(liveIn[I], tmpLiveIn).size() != 0 ||
-          setDiff(tmpLiveIn, liveIn[I]).size() != 0) {
-        for (Instruction *pred : PredInst[I]) {
-          Worklist.push_back(pred);
-        }
-      }
-    }
-
-    errs() << "Function: " << F.getName() << "\n";
-    for (BasicBlock &BB : F) {
-      errs() << BB.getName() << ":\n";
-      for (Instruction &I : BB) {
-        if (!isa<PHINode>(I)) {
-          printSet(liveIn[&I]);
-        }
-        I.dump();
-      }
-      printSet(liveOut[&BB.back()]);
-      errs() << "\n";
+  bool doFinalization(Module &M) override {
+    // print info from the universal infoVec
+    for (auto i : infoVec) {
+      errs() << "<" << i->id << ">: ";
+      errs() << "func=<" << i->func << ">, ";
+      errs() << "depth=<" << i->depth << ">, ";
+      StringRef sub = i->hasSubLoops ? "true" : "false";
+      errs() << "subLoops=<" << sub << ">, ";
+      errs() << "BBs=<" << i->bbCount << ">, ";
+      errs() << "instrs=<" << i->instCount << ">, ";
+      errs() << "atomics=<" << i->atomicsCount << ">, ";
+      errs() << "branches=<" << i->branchCount << ">\n";
     }
     return false;
   }
 
-  void printSet(DenseSet<StringRef> set) {
-    unsigned int count = 0;
-    errs() << "\t{";
-    for (StringRef str : set) {
-      count++;
-      errs() << str;
-      if (count != set.size())
-        errs() << ",";
+  bool runOnFunction(Function &F) override {
+    for (BasicBlock &BB : F) {
+      for (Instruction &I : BB) {
+        if (I.isAtomic()) {
+          errs() << "====== ";
+          I.dump();
+        }
+      }
     }
-    errs() << "}\n";
+    LoopInfo &LI = getAnalysis<LoopInfoWrapperPass>().getLoopInfo();
+    for (LoopInfo::reverse_iterator i = LI.rbegin(); i != LI.rend(); i++) {
+      Loop *loop = *i;
+      analyseLoop(F, loop);
+    }
+    return false;
   }
 
-  DenseSet<StringRef> setUnion(DenseSet<StringRef> a, DenseSet<StringRef> b) {
-    for (StringRef str : b) {
-      a.insert(str);
-    }
-    return a;
-  }
+  void analyseLoop(Function &F, Loop *loop) {
+    LoopAnalysisInfo *loopInfo = new LoopAnalysisInfo();
+    infoVec.push_back(loopInfo);
 
-  DenseSet<StringRef> setDiff(DenseSet<StringRef> a, DenseSet<StringRef> b) {
-    for (StringRef str : b) {
-      a.erase(str);
+    loopInfo->id = loopCounter;
+    loopInfo->func = F.getName();
+    loopInfo->depth = loop->getLoopDepth() - 1;
+    const std::vector<Loop *> subloopVec = loop->getSubLoops();
+    loopInfo->hasSubLoops = subloopVec.size() > 0 ? true : false;
+
+    loopCounter++;
+    for (auto l : subloopVec) {
+      analyseLoop(F, l);
     }
-    return a;
+
+    errs() << "[" << loopInfo->id << "]" << loop->getName() << "\n";
+    int t = 0;
+    for (Loop::block_iterator bb = loop->block_begin(); bb != loop->block_end();
+         bb++) {
+      BasicBlock *BB = *bb;
+      if (countedBB.find(BB) == countedBB.end()) {
+        loopInfo->bbCount++;
+        countedBB.insert(BB);
+        errs() << "\t---b: " << BB->getName() << "\n";
+        for (Instruction &I : *BB) {
+          errs() << ++t;
+          I.dump();
+        }
+      }
+      errs() << "\tb: " << BB->getName() << "\n";
+      for (Instruction &I : *BB) {
+        if (I.isAtomic())
+          loopInfo->atomicsCount++;
+        if (BranchInst *BrI = dyn_cast<BranchInst>(&I)) {
+          if (countedBrInst.find(BrI) == countedBrInst.end()) {
+            loopInfo->branchCount++;
+            countedBrInst.insert(BrI);
+          }
+        }
+        loopInfo->instCount++;
+        // errs() << loopInfo->instCount;
+        // I.dump();
+      }
+    }
   }
 };
 } // namespace
 
-char LoopAnalysis::ID = 0;
-static RegisterPass<LoopAnalysis>
+char LoopAnalysisPass::ID = 0;
+static RegisterPass<LoopAnalysisPass>
     X("loop-analysis", "CSE521: Loop Information", false, false);
