@@ -1,9 +1,9 @@
 ; ModuleID = '<stdin>'
-source_filename = "test.c"
+source_filename = "test/test.c"
 target datalayout = "e-m:o-p270:32:32-p271:32:32-p272:64:64-i64:64-f80:128-n8:16:32:64-S128"
 target triple = "x86_64-apple-macosx10.15.0"
 
-@g = common global i32 0, align 4
+@g = global i32 0, align 4
 
 ; Function Attrs: noinline nounwind ssp uwtable
 define i32 @g_incr(i32 %c) #0 {
@@ -46,4 +46,4 @@ attributes #0 = { noinline nounwind ssp uwtable "correctly-rounded-divide-sqrt-f
 
 !0 = !{i32 1, !"wchar_size", i32 4}
 !1 = !{i32 7, !"PIC Level", i32 2}
-!2 = !{!"clang version 11.0.0 (https://github.com/llvm/llvm-project.git 4a303163083601f03f15edffe74651655ea30347)"}
+!2 = !{!"clang version 11.0.0 (https://github.com/isolachine/llvm-project.git 9cd5fd5ce5f6d31909f28a654611e59fe5e656c0)"}

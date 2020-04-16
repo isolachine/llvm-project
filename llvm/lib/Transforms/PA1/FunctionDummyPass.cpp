@@ -10,11 +10,11 @@
 using namespace llvm;
 
 namespace {
-class FunctionInfo : public FunctionPass {
+class FunctionDummy : public FunctionPass {
 public:
   static char ID;
-  FunctionInfo() : FunctionPass(ID) {}
-  ~FunctionInfo() {}
+  FunctionDummy() : FunctionPass(ID) {}
+  ~FunctionDummy() {}
 
   void getAnalysisUsage(AnalysisUsage &AU) const override {
     AU.setPreservesAll();
@@ -29,6 +29,6 @@ public:
 };
 } // namespace
 
-char FunctionInfo::ID = 0;
-static RegisterPass<FunctionInfo>
+char FunctionDummy::ID = 0;
+static RegisterPass<FunctionDummy>
     X("function-dummy", "CSE521: Function Information", false, false);
