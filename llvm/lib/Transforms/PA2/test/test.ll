@@ -1,49 +1,301 @@
-; ModuleID = '<stdin>'
+; ModuleID = 'test/test.c'
 source_filename = "test/test.c"
 target datalayout = "e-m:o-p270:32:32-p271:32:32-p272:64:64-i64:64-f80:128-n8:16:32:64-S128"
 target triple = "x86_64-apple-macosx10.15.0"
 
-@g = global i32 0, align 4
-
-; Function Attrs: noinline nounwind ssp uwtable
-define i32 @g_incr(i32 %c) #0 {
+; Function Attrs: noinline nounwind optnone ssp uwtable
+define i32 @foo() #0 {
 entry:
-  %tmp1 = load i32, i32* @g, align 4
-  %add = add nsw i32 %tmp1, %c
-  store i32 %add, i32* @g, align 4
-  %tmp2 = load i32, i32* @g, align 4
-  ret i32 %tmp2
-}
-
-; Function Attrs: noinline nounwind ssp uwtable
-define i32 @loop(i32 %a, i32 %b, i32 %c) #0 {
-entry:
+  %i = alloca i32, align 4
+  %j = alloca i32, align 4
+  %k = alloca i32, align 4
+  %t = alloca i32, align 4
+  store i32 0, i32* %t, align 4
+  store i32 0, i32* %i, align 4
   br label %for.cond
 
-for.cond:                                         ; preds = %for.inc, %entry
-  %i.0 = phi i32 [ %a, %entry ], [ %inc, %for.inc ]
-  %cmp = icmp slt i32 %i.0, %b
-  br i1 %cmp, label %for.body, label %for.end
+for.cond:                                         ; preds = %for.inc18, %entry
+  %0 = load i32, i32* %i, align 4
+  %cmp = icmp slt i32 %0, 10
+  br i1 %cmp, label %for.body, label %for.end20
 
 for.body:                                         ; preds = %for.cond
-  %call = call i32 @g_incr(i32 %c)
+  store i32 0, i32* %j, align 4
+  br label %for.cond1
+
+for.cond1:                                        ; preds = %for.inc8, %for.body
+  %1 = load i32, i32* %j, align 4
+  %cmp2 = icmp slt i32 %1, 10
+  br i1 %cmp2, label %for.body3, label %for.end10
+
+for.body3:                                        ; preds = %for.cond1
+  store i32 0, i32* %k, align 4
+  br label %for.cond4
+
+for.cond4:                                        ; preds = %for.inc, %for.body3
+  %2 = load i32, i32* %k, align 4
+  %cmp5 = icmp slt i32 %2, 10
+  br i1 %cmp5, label %for.body6, label %for.end
+
+for.body6:                                        ; preds = %for.cond4
+  %3 = load i32, i32* %t, align 4
+  %inc = add nsw i32 %3, 1
+  store i32 %inc, i32* %t, align 4
   br label %for.inc
 
-for.inc:                                          ; preds = %for.body
-  %inc = add nsw i32 %i.0, 1
+for.inc:                                          ; preds = %for.body6
+  %4 = load i32, i32* %k, align 4
+  %inc7 = add nsw i32 %4, 1
+  store i32 %inc7, i32* %k, align 4
+  br label %for.cond4
+
+for.end:                                          ; preds = %for.cond4
+  br label %for.inc8
+
+for.inc8:                                         ; preds = %for.end
+  %5 = load i32, i32* %j, align 4
+  %inc9 = add nsw i32 %5, 1
+  store i32 %inc9, i32* %j, align 4
+  br label %for.cond1
+
+for.end10:                                        ; preds = %for.cond1
+  store i32 0, i32* %j, align 4
+  br label %for.cond11
+
+for.cond11:                                       ; preds = %for.inc15, %for.end10
+  %6 = load i32, i32* %j, align 4
+  %cmp12 = icmp slt i32 %6, 10
+  br i1 %cmp12, label %for.body13, label %for.end17
+
+for.body13:                                       ; preds = %for.cond11
+  %7 = load i32, i32* %t, align 4
+  %inc14 = add nsw i32 %7, 1
+  store i32 %inc14, i32* %t, align 4
+  br label %for.inc15
+
+for.inc15:                                        ; preds = %for.body13
+  %8 = load i32, i32* %j, align 4
+  %inc16 = add nsw i32 %8, 1
+  store i32 %inc16, i32* %j, align 4
+  br label %for.cond11
+
+for.end17:                                        ; preds = %for.cond11
+  br label %for.inc18
+
+for.inc18:                                        ; preds = %for.end17
+  %9 = load i32, i32* %i, align 4
+  %inc19 = add nsw i32 %9, 1
+  store i32 %inc19, i32* %i, align 4
   br label %for.cond
 
-for.end:                                          ; preds = %for.cond
-  %tmp6 = load i32, i32* @g, align 4
-  %add = add nsw i32 0, %tmp6
-  ret i32 %add
+for.end20:                                        ; preds = %for.cond
+  store i32 0, i32* %i, align 4
+  br label %for.cond21
+
+for.cond21:                                       ; preds = %for.inc38, %for.end20
+  %10 = load i32, i32* %i, align 4
+  %cmp22 = icmp slt i32 %10, 20
+  br i1 %cmp22, label %for.body23, label %for.end40
+
+for.body23:                                       ; preds = %for.cond21
+  store i32 0, i32* %j, align 4
+  br label %for.cond24
+
+for.cond24:                                       ; preds = %for.inc28, %for.body23
+  %11 = load i32, i32* %j, align 4
+  %cmp25 = icmp slt i32 %11, 20
+  br i1 %cmp25, label %for.body26, label %for.end30
+
+for.body26:                                       ; preds = %for.cond24
+  %12 = load i32, i32* %t, align 4
+  %inc27 = add nsw i32 %12, 1
+  store i32 %inc27, i32* %t, align 4
+  br label %for.inc28
+
+for.inc28:                                        ; preds = %for.body26
+  %13 = load i32, i32* %j, align 4
+  %inc29 = add nsw i32 %13, 1
+  store i32 %inc29, i32* %j, align 4
+  br label %for.cond24
+
+for.end30:                                        ; preds = %for.cond24
+  store i32 0, i32* %j, align 4
+  br label %for.cond31
+
+for.cond31:                                       ; preds = %for.inc35, %for.end30
+  %14 = load i32, i32* %j, align 4
+  %cmp32 = icmp slt i32 %14, 20
+  br i1 %cmp32, label %for.body33, label %for.end37
+
+for.body33:                                       ; preds = %for.cond31
+  %15 = load i32, i32* %t, align 4
+  %inc34 = add nsw i32 %15, 1
+  store i32 %inc34, i32* %t, align 4
+  br label %for.inc35
+
+for.inc35:                                        ; preds = %for.body33
+  %16 = load i32, i32* %j, align 4
+  %inc36 = add nsw i32 %16, 1
+  store i32 %inc36, i32* %j, align 4
+  br label %for.cond31
+
+for.end37:                                        ; preds = %for.cond31
+  br label %for.inc38
+
+for.inc38:                                        ; preds = %for.end37
+  %17 = load i32, i32* %i, align 4
+  %inc39 = add nsw i32 %17, 1
+  store i32 %inc39, i32* %i, align 4
+  br label %for.cond21
+
+for.end40:                                        ; preds = %for.cond21
+  %18 = load i32, i32* %t, align 4
+  ret i32 %18
 }
 
-attributes #0 = { noinline nounwind ssp uwtable "correctly-rounded-divide-sqrt-fp-math"="false" "disable-tail-calls"="false" "frame-pointer"="all" "less-precise-fpmad"="false" "min-legal-vector-width"="0" "no-infs-fp-math"="false" "no-jump-tables"="false" "no-nans-fp-math"="false" "no-signed-zeros-fp-math"="false" "no-trapping-math"="false" "stack-protector-buffer-size"="8" "target-cpu"="penryn" "target-features"="+cx16,+cx8,+fxsr,+mmx,+sahf,+sse,+sse2,+sse3,+sse4.1,+ssse3,+x87" "unsafe-fp-math"="false" "use-soft-float"="false" }
+; Function Attrs: noinline nounwind optnone ssp uwtable
+define i32 @bar() #0 {
+entry:
+  %i = alloca i32, align 4
+  %j = alloca i32, align 4
+  %k = alloca i32, align 4
+  %t = alloca i32, align 4
+  store i32 0, i32* %t, align 4
+  store i32 0, i32* %i, align 4
+  br label %for.cond
+
+for.cond:                                         ; preds = %for.inc18, %entry
+  %0 = load i32, i32* %i, align 4
+  %cmp = icmp slt i32 %0, 20
+  br i1 %cmp, label %for.body, label %for.end20
+
+for.body:                                         ; preds = %for.cond
+  store i32 0, i32* %j, align 4
+  br label %for.cond1
+
+for.cond1:                                        ; preds = %for.inc, %for.body
+  %1 = load i32, i32* %j, align 4
+  %cmp2 = icmp slt i32 %1, 20
+  br i1 %cmp2, label %for.body3, label %for.end
+
+for.body3:                                        ; preds = %for.cond1
+  %2 = load i32, i32* %t, align 4
+  %inc = add nsw i32 %2, 1
+  store i32 %inc, i32* %t, align 4
+  br label %for.inc
+
+for.inc:                                          ; preds = %for.body3
+  %3 = load i32, i32* %j, align 4
+  %inc4 = add nsw i32 %3, 1
+  store i32 %inc4, i32* %j, align 4
+  br label %for.cond1
+
+for.end:                                          ; preds = %for.cond1
+  store i32 0, i32* %j, align 4
+  br label %for.cond5
+
+for.cond5:                                        ; preds = %for.inc15, %for.end
+  %4 = load i32, i32* %j, align 4
+  %cmp6 = icmp slt i32 %4, 10
+  br i1 %cmp6, label %for.body7, label %for.end17
+
+for.body7:                                        ; preds = %for.cond5
+  store i32 0, i32* %k, align 4
+  br label %for.cond8
+
+for.cond8:                                        ; preds = %for.inc12, %for.body7
+  %5 = load i32, i32* %k, align 4
+  %cmp9 = icmp slt i32 %5, 10
+  br i1 %cmp9, label %for.body10, label %for.end14
+
+for.body10:                                       ; preds = %for.cond8
+  %6 = load i32, i32* %t, align 4
+  %inc11 = add nsw i32 %6, 1
+  store i32 %inc11, i32* %t, align 4
+  br label %for.inc12
+
+for.inc12:                                        ; preds = %for.body10
+  %7 = load i32, i32* %k, align 4
+  %inc13 = add nsw i32 %7, 1
+  store i32 %inc13, i32* %k, align 4
+  br label %for.cond8
+
+for.end14:                                        ; preds = %for.cond8
+  br label %for.inc15
+
+for.inc15:                                        ; preds = %for.end14
+  %8 = load i32, i32* %j, align 4
+  %inc16 = add nsw i32 %8, 1
+  store i32 %inc16, i32* %j, align 4
+  br label %for.cond5
+
+for.end17:                                        ; preds = %for.cond5
+  br label %for.inc18
+
+for.inc18:                                        ; preds = %for.end17
+  %9 = load i32, i32* %i, align 4
+  %inc19 = add nsw i32 %9, 1
+  store i32 %inc19, i32* %i, align 4
+  br label %for.cond
+
+for.end20:                                        ; preds = %for.cond
+  %10 = load i32, i32* %t, align 4
+  ret i32 %10
+}
+
+; Function Attrs: noinline nounwind optnone ssp uwtable
+define i32 @main(i32 %argc, i8** %argv) #0 {
+entry:
+  %retval = alloca i32, align 4
+  %argc.addr = alloca i32, align 4
+  %argv.addr = alloca i8**, align 8
+  %arg = alloca i8*, align 8
+  %index = alloca i32, align 4
+  store i32 0, i32* %retval, align 4
+  store i32 %argc, i32* %argc.addr, align 4
+  store i8** %argv, i8*** %argv.addr, align 8
+  %0 = load i32, i32* %argc.addr, align 4
+  %tobool = icmp ne i32 %0, 0
+  br i1 %tobool, label %if.then, label %if.end
+
+if.then:                                          ; preds = %entry
+  %1 = load i8**, i8*** %argv.addr, align 8
+  %arrayidx = getelementptr inbounds i8*, i8** %1, i64 0
+  %2 = load i8*, i8** %arrayidx, align 8
+  store i8* %2, i8** %arg, align 8
+  store i32 0, i32* %index, align 4
+  br label %while.cond
+
+while.cond:                                       ; preds = %while.body, %if.then
+  %3 = load i8*, i8** %arg, align 8
+  %4 = load i32, i32* %index, align 4
+  %idx.ext = sext i32 %4 to i64
+  %add.ptr = getelementptr inbounds i8, i8* %3, i64 %idx.ext
+  %5 = load i8, i8* %add.ptr, align 1
+  %conv = sext i8 %5 to i32
+  %cmp = icmp ne i32 %conv, 0
+  br i1 %cmp, label %while.body, label %while.end
+
+while.body:                                       ; preds = %while.cond
+  %call = call i32 @foo()
+  %call2 = call i32 @bar()
+  %6 = load i32, i32* %index, align 4
+  %inc = add nsw i32 %6, 1
+  store i32 %inc, i32* %index, align 4
+  br label %while.cond
+
+while.end:                                        ; preds = %while.cond
+  br label %if.end
+
+if.end:                                           ; preds = %while.end, %entry
+  ret i32 0
+}
+
+attributes #0 = { noinline nounwind optnone ssp uwtable "correctly-rounded-divide-sqrt-fp-math"="false" "disable-tail-calls"="false" "frame-pointer"="all" "less-precise-fpmad"="false" "min-legal-vector-width"="0" "no-infs-fp-math"="false" "no-jump-tables"="false" "no-nans-fp-math"="false" "no-signed-zeros-fp-math"="false" "no-trapping-math"="false" "stack-protector-buffer-size"="8" "target-cpu"="penryn" "target-features"="+cx16,+cx8,+fxsr,+mmx,+sahf,+sse,+sse2,+sse3,+sse4.1,+ssse3,+x87" "unsafe-fp-math"="false" "use-soft-float"="false" }
 
 !llvm.module.flags = !{!0, !1}
 !llvm.ident = !{!2}
 
 !0 = !{i32 1, !"wchar_size", i32 4}
 !1 = !{i32 7, !"PIC Level", i32 2}
-!2 = !{!"clang version 11.0.0 (https://github.com/isolachine/llvm-project.git 9cd5fd5ce5f6d31909f28a654611e59fe5e656c0)"}
+!2 = !{!"clang version 11.0.0 (git@github.com:isolachine/llvm-project.git 3daf6d65bb6e7ca06359e5911d4e2da4ed7d63de)"}

@@ -44,7 +44,7 @@ private:
   std::vector<LoopAnalysisInfo *> infoVec;
   std::set<BasicBlock *> countedBB;
   std::set<BranchInst *> countedBrInst;
-  unsigned int loopCounter;
+  int counter;
 
 public:
   static char ID;
@@ -56,13 +56,21 @@ public:
     AU.setPreservesAll();
   }
 
-  bool doInitialization(Module &M) override {
-    loopCounter = 0;
-    return false;
-  }
+  bool doInitialization(Module &M) override { return false; }
 
   bool doFinalization(Module &M) override {
     // print info from the universal infoVec
+
+    return false;
+  }
+
+  bool runOnFunction(Function &F) override {
+    std::vector<LoopAnalysisInfo *> infoVec;
+    LoopInfo &LI = getAnalysis<LoopInfoWrapperPass>().getLoopInfo();
+    for (LoopInfo::reverse_iterator i = LI.rbegin(); i != LI.rend(); i++) {
+      Loop *loop = *i;
+      analyseLoop(F, loop);
+    }
     for (auto i : infoVec) {
       errs() << "<" << i->id << ">: ";
       errs() << "func=<" << i->func << ">, ";
@@ -77,53 +85,27 @@ public:
     return false;
   }
 
-  bool runOnFunction(Function &F) override {
-    for (BasicBlock &BB : F) {
-      for (Instruction &I : BB) {
-        if (I.isAtomic()) {
-          errs() << "====== ";
-          I.dump();
-        }
-      }
-    }
-    LoopInfo &LI = getAnalysis<LoopInfoWrapperPass>().getLoopInfo();
-    for (LoopInfo::reverse_iterator i = LI.rbegin(); i != LI.rend(); i++) {
-      Loop *loop = *i;
-      analyseLoop(F, loop);
-    }
-    return false;
-  }
-
   void analyseLoop(Function &F, Loop *loop) {
     LoopAnalysisInfo *loopInfo = new LoopAnalysisInfo();
-    infoVec.push_back(loopInfo);
 
-    loopInfo->id = loopCounter;
+    loopInfo->id = infoVec.size();
     loopInfo->func = F.getName();
     loopInfo->depth = loop->getLoopDepth() - 1;
     const std::vector<Loop *> subloopVec = loop->getSubLoops();
     loopInfo->hasSubLoops = subloopVec.size() > 0 ? true : false;
+    infoVec.push_back(loopInfo);
 
-    loopCounter++;
     for (auto l : subloopVec) {
       analyseLoop(F, l);
     }
 
-    errs() << "[" << loopInfo->id << "]" << loop->getName() << "\n";
-    int t = 0;
     for (Loop::block_iterator bb = loop->block_begin(); bb != loop->block_end();
          bb++) {
       BasicBlock *BB = *bb;
       if (countedBB.find(BB) == countedBB.end()) {
         loopInfo->bbCount++;
         countedBB.insert(BB);
-        errs() << "\t---b: " << BB->getName() << "\n";
-        for (Instruction &I : *BB) {
-          errs() << ++t;
-          I.dump();
-        }
       }
-      errs() << "\tb: " << BB->getName() << "\n";
       for (Instruction &I : *BB) {
         if (I.isAtomic())
           loopInfo->atomicsCount++;
@@ -134,8 +116,6 @@ public:
           }
         }
         loopInfo->instCount++;
-        // errs() << loopInfo->instCount;
-        // I.dump();
       }
     }
   }
